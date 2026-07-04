@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Genetic Algorithm Sandbox 🧬</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Ctext%20y='.9em'%20font-size='90'%3E%F0%9F%A7%AC%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- ==================== STAGE (canvas) ==================== -->
+    <section id="stage">
+      <div id="canvas-wrap">
+        <canvas id="landscape"></canvas>
+        <div id="legend">
+          <span><i class="dot pop"></i> population</span>
+          <span><i class="dot best"></i> current best</span>
+          <span><i class="dot opt"></i> global optimum</span>
+        </div>
+      </div>
+      <div id="colorbar">
+        <span>low fitness</span>
+        <div class="bar"></div>
+        <span>high fitness</span>
+      </div>
+    </section>
+
+    <!-- ==================== CONTROL PANEL ==================== -->
+    <aside id="panel">
+      <header id="brand">
+        <h1>🧬 GA Sandbox</h1>
+        <p class="tag">Watch a population evolve up a fitness landscape.</p>
+      </header>
+
+      <!-- Transport -->
+      <div class="card transport">
+        <button id="playBtn" class="primary">▶ Play</button>
+        <button id="stepBtn">⏭ Step</button>
+        <button id="resetBtn">↺ Reset</button>
+      </div>
+
+      <!-- Readouts -->
+      <div class="card">
+        <div class="readout-grid">
+          <div class="ro"><span class="ro-label">Generation</span><span class="ro-val" id="roGen">0</span></div>
+          <div class="ro"><span class="ro-label">Best fitness</span><span class="ro-val" id="roBest">–</span></div>
+          <div class="ro"><span class="ro-label">Mean fitness</span><span class="ro-val" id="roMean">–</span></div>
+          <div class="ro"><span class="ro-label">Best → optimum</span><span class="ro-val" id="roDist">–</span></div>
+        </div>
+        <canvas id="chart"></canvas>
+        <div class="chart-key">
+          <span><i class="line best"></i> best</span>
+          <span><i class="line mean"></i> mean</span>
+        </div>
+
+        <div class="diversity">
+          <div class="div-head">
+            <span>Diversity (population spread)</span>
+            <span id="roDiv">–</span>
+          </div>
+          <div class="div-track"><div id="divBar" class="div-fill"></div></div>
+          <p class="hint" id="divHint">Higher = still exploring. When this collapses, evolution has converged.</p>
+        </div>
+      </div>
+
+      <!-- Controls -->
+      <div class="card">
+        <div class="ctrl">
+          <label>Landscape</label>
+          <select id="landscapeSel"></select>
+        </div>
+
+        <div class="ctrl">
+          <label>Population size <span class="v" id="popVal">150</span></label>
+          <input type="range" id="popSize" min="10" max="500" step="10" value="150" />
+        </div>
+
+        <div class="ctrl">
+          <label>Mutation rate <span class="v" id="mrVal">0.15</span></label>
+          <input type="range" id="mutRate" min="0" max="1" step="0.01" value="0.15" />
+        </div>
+
+        <div class="ctrl">
+          <label>Mutation strength (σ) <span class="v" id="msVal">0.30</span></label>
+          <input type="range" id="mutSigma" min="0.01" max="1.5" step="0.01" value="0.30" />
+        </div>
+
+        <div class="ctrl">
+          <label>Selection</label>
+          <select id="selSel">
+            <option value="tournament">Tournament</option>
+            <option value="roulette">Roulette (fitness-proportionate)</option>
+          </select>
+        </div>
+
+        <div class="ctrl" id="tournRow">
+          <label>Tournament size <span class="v" id="tsVal">3</span></label>
+          <input type="range" id="tournSize" min="2" max="10" step="1" value="3" />
+        </div>
+
+        <div class="ctrl">
+          <label>Elitism (kept unchanged) <span class="v" id="elVal">2</span></label>
+          <input type="range" id="elitism" min="0" max="20" step="1" value="2" />
+        </div>
+
+        <div class="ctrl row">
+          <label for="crossover">Crossover (blend)</label>
+          <input type="checkbox" id="crossover" checked />
+        </div>
+
+        <div class="ctrl">
+          <label>Speed <span class="v" id="gpsVal">8</span> gen/s</label>
+          <input type="range" id="gps" min="1" max="60" step="1" value="8" />
+        </div>
+      </div>
+
+      <!-- How it works -->
+      <details class="card how">
+        <summary>How it works</summary>
+        <p>Each dot is an <b>individual</b> whose genome is a point (x, y). The colored map is a
+        <b>fitness landscape</b> — brighter is better. Every generation the algorithm:
+        <b>evaluates</b> fitness, <b>selects</b> fitter parents, <b>crosses over</b> and
+        <b>mutates</b> them into a new population.</p>
+        <p>Try the <b>Rastrigin</b> landscape with a low mutation rate and watch the swarm get
+        stuck on a local peak — the <b>diversity meter</b> collapsing is premature convergence.
+        Raise mutation strength to escape.</p>
+      </details>
+
+      <footer class="foot">Vanilla JS · no build step · fully offline</footer>
+    </aside>
+  </div>
+
+  <script src="landscape.js"></script>
+  <script src="ga.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
