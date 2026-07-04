@@ -1,11 +1,23 @@
 /* ============================================================
    art.js — shared "Evolve a Picture" core (main thread AND worker).
-   A genome is a stack of semi-transparent shapes; each shape is either
-   a polygon (pts[]) or an ellipse (cx,cy,rx,ry,rot). We render it,
-   compare pixels to a target (perceptually luma-weighted), and run a
-   (1+1) evolution strategy: mutate a copy of the best, keep it ONLY if
-   it matches better. Best error is monotonically non-increasing, so
-   Match% never goes down within a run.
+   A genome is a stack of semi-transparent shapes (polygon pts[] or an
+   ellipse cx,cy,rx,ry,rot). We render it, compare pixels to a target
+   (perceptually luma-weighted), and run a (1+1) evolution strategy:
+   mutate a copy of the best, keep it ONLY if it matches better.
+
+   PASS 2 performance:
+    • Incremental "dirty-rectangle" fitness: a single-shape mutation only
+      changes pixels inside the union of the shape's old+new bounding box.
+      We re-render ONLY that box from the full genome (absolute coords, read
+      just the box) and update total = bestError - oldBoxError + newBoxError,
+      which equals a full rescore exactly (a cached per-pixel error array
+      makes oldBoxError exact). Big/whole-image boxes fall back to full.
+    • Multi-scale coarse->fine eval: evolve at a small resolution first
+      (cheap, places big shapes fast), stepping up on stall/age. The metric
+      changes at a step-up, so displayed Match% is a running max (never
+      appears to drop).
+
+   Best-of-run Match% is monotonic within a run except on reset/target change.
 
    Exposes (window / worker self / globalThis):
      Art = { ArtEvolver, mutate, randomShape, renderGenome, pickWeightedIndex }
@@ -15,11 +27,14 @@
 
   // ---- perception + tuning constants ----
   const LUMA_R = 0.2126, LUMA_G = 0.7152, LUMA_B = 0.0722; // Rec.709
-  const GRID = 32;          // error-map resolution (32x32 -> ~6px cells, finer than an eye)
-  const MAP_REFRESH = 15;   // recompute the error map every N accepted improvements
+  const GRID = 32;             // error-map resolution (32x32 -> fine features)
+  const MAP_REFRESH = 15;      // recompute the error map every N improvements
   const ANNEAL_WINDOW = 250;   // attempts per 1/5-rule mutation-size update
-  const STALL_ATTEMPTS = 3000; // grow the shape budget after this many attempts w/o improvement
+  const STALL_ATTEMPTS = 2500; // step-up / grow after this many attempts w/o improvement
+  const SCALE_MAX_ATT = 20000; // force a step-up if a scale runs this long
   const GROW_BATCH = 8;        // shapes appended per grow-on-stall event
+  const SCALE_FACTORS = [0.32, 0.64, 1.0]; // coarse -> fine (of the target long side)
+  const BOX_FULL_FRAC = 0.5;   // a dirty box >= this fraction of the image => just do full
 
   const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
   const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -30,7 +45,6 @@
   const PI = Math.PI;
   const wrapPi = (a) => { a %= PI; return a < 0 ? a + PI : a; };
 
-  // Works on the main thread and inside a worker (no document there).
   function makeCanvas(w, h) {
     if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h);
     const c = document.createElement('canvas');
@@ -47,7 +61,28 @@
     return Math.abs(a) / 2;
   }
 
-  // Sample an index from a cumulative-weight array (weights ∝ cell error).
+  // Axis-aligned bounding box of a shape in normalized [0,1] coords.
+  function shapeBBox(s) {
+    if (s.type === 'ellipse') {
+      const c = Math.cos(s.rot), si = Math.sin(s.rot);
+      const ex = Math.sqrt(s.rx * s.rx * c * c + s.ry * s.ry * si * si);
+      const ey = Math.sqrt(s.rx * s.rx * si * si + s.ry * s.ry * c * c);
+      return { x0: s.cx - ex, y0: s.cy - ey, x1: s.cx + ex, y1: s.cy + ey };
+    }
+    let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+    for (const p of s.pts) {
+      if (p.x < x0) x0 = p.x; if (p.y < y0) y0 = p.y;
+      if (p.x > x1) x1 = p.x; if (p.y > y1) y1 = p.y;
+    }
+    return { x0, y0, x1, y1 };
+  }
+  function boxUnion(a, b) {
+    return {
+      x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0),
+      x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1)
+    };
+  }
+
   function pickWeightedIndex(cum, total) {
     if (!(total > 0)) return -1;
     const r = Math.random() * total;
@@ -61,16 +96,13 @@
     if (cfg.shapeKind === 'ellipse') {
       kind = 'ellipse';
     } else if (cfg.shapeKind === 'mixed') {
-      // Truly mixed: each shape is independently one of ~three balanced kinds
-      // — ellipse, triangle, or a higher-vertex polygon — so all three show up.
       const r = Math.random();
       if (r < 0.34) { kind = 'ellipse'; }
-      else if (r < 0.67) { kind = 'poly'; nVerts = 3; }                 // triangle
-      else { kind = 'poly'; nVerts = 5 + ((Math.random() * 4) | 0); }   // 5..8 polygon
+      else if (r < 0.67) { kind = 'poly'; nVerts = 3; }
+      else { kind = 'poly'; nVerts = 5 + ((Math.random() * 4) | 0); }
     } else {
       kind = 'poly';
     }
-
     if (kind === 'ellipse') {
       return {
         type: 'ellipse',
@@ -97,8 +129,6 @@
     return { type: 'poly', pts, r: s.r, g: s.g, b: s.b, a: s.a };
   }
 
-  // Move a shape so its centre sits at (p.x, p.y) — used to place new / relocated
-  // shapes onto high-error regions.
   function placeAt(s, p) {
     const x = clamp01(p.x), y = clamp01(p.y);
     if (s.type === 'ellipse') { s.cx = x; s.cy = y; return; }
@@ -112,9 +142,7 @@
     }
   }
 
-  // Scale a shape to roughly `size` (fraction of canvas) about its centre — lets
-  // shapes placed on a hot cell match the feature's scale (tiny for eyes/edges,
-  // bigger for flat areas).
+  // Scale a shape to roughly `size` (fraction of canvas) about its centre.
   function sizeShape(s, size) {
     if (s.type === 'ellipse') {
       s.rx = clamp(size * (0.7 + Math.random() * 0.6), 0.01, 0.7);
@@ -143,134 +171,158 @@
   function mutateShape(s, amt) {
     const t = Math.random();
     if (s.type === 'ellipse') {
-      if (t < 0.35) {
-        s.cx = clamp01(s.cx + rnd() * amt);
-        s.cy = clamp01(s.cy + rnd() * amt);
-      } else if (t < 0.60) {
-        s.rx = clamp(s.rx + rnd() * amt * 0.6, 0.01, 0.7);
-        s.ry = clamp(s.ry + rnd() * amt * 0.6, 0.01, 0.7);
-      } else if (t < 0.72) {
-        s.rot = wrapPi(s.rot + rnd() * amt * PI);
-      } else if (t < 0.90) {
-        tweakColor(s, amt);
-      } else {
-        s.a = clamp(s.a + rnd() * amt * 0.6, 0.02, 1);
-      }
+      if (t < 0.35) { s.cx = clamp01(s.cx + rnd() * amt); s.cy = clamp01(s.cy + rnd() * amt); }
+      else if (t < 0.60) { s.rx = clamp(s.rx + rnd() * amt * 0.6, 0.01, 0.7); s.ry = clamp(s.ry + rnd() * amt * 0.6, 0.01, 0.7); }
+      else if (t < 0.72) { s.rot = wrapPi(s.rot + rnd() * amt * PI); }
+      else if (t < 0.90) { tweakColor(s, amt); }
+      else { s.a = clamp(s.a + rnd() * amt * 0.6, 0.02, 1); }
     } else {
-      if (t < 0.5) {
-        const v = s.pts[randInt(s.pts.length)];
-        v.x = clamp01(v.x + rnd() * amt);
-        v.y = clamp01(v.y + rnd() * amt);
-      } else if (t < 0.85) {
-        tweakColor(s, amt);
-      } else {
-        s.a = clamp(s.a + rnd() * amt * 0.6, 0.02, 1);
-      }
+      if (t < 0.5) { const v = s.pts[randInt(s.pts.length)]; v.x = clamp01(v.x + rnd() * amt); v.y = clamp01(v.y + rnd() * amt); }
+      else if (t < 0.85) { tweakColor(s, amt); }
+      else { s.a = clamp(s.a + rnd() * amt * 0.6, 0.02, 1); }
     }
   }
 
-  // Produce a mutated copy of `genome` (copy-on-write: only the touched
-  // shape is deep-cloned). `hotspot`, when supplied, returns {x,y,size} biased
-  // toward high-error regions; `amt` is the effective (annealed) mutation size,
-  // defaulting to cfg.mutationAmount. Both change only the PROPOSAL, never the
-  // accept/reject rule, so monotonicity is preserved.
-  function mutate(genome, cfg, hotspot, amt) {
+  // Core proposal: returns { genome, box } where `box` is the normalized
+  // affected region (union of old+new extents of the touched shape). Every
+  // mutation type here is localizable; the evolver decides box-vs-full eval.
+  function proposeMutation(genome, cfg, hotspot, amt) {
     const shapes = genome.shapes.slice();
     if (amt === undefined) amt = cfg.mutationAmount;
     const roll = Math.random();
+    let box;
 
     if (roll < 0.08 && shapes.length < cfg.maxShapes) {
       const s = randomShape(cfg);
       if (hotspot) { const hp = hotspot(); placeAt(s, hp); if (hp.size) sizeShape(s, hp.size); }
       shapes.splice(randInt(shapes.length + 1), 0, s);
+      box = shapeBBox(s);
     } else if (roll < 0.14 && shapes.length > cfg.minShapes) {
-      shapes.splice(randInt(shapes.length), 1);
-    } else if (roll < 0.20 && shapes.length > 1) {
       const i = randInt(shapes.length);
+      box = shapeBBox(shapes[i]);
+      shapes.splice(i, 1);
+    } else if (roll < 0.20 && shapes.length > 1) {
+      const i = randInt(shapes.length);        // reorder (z-order): affects only this shape's box
       const s = shapes.splice(i, 1)[0];
       shapes.splice(randInt(shapes.length + 1), 0, s);
+      box = shapeBBox(s);
     } else if (roll < 0.26 && hotspot) {
-      const i = randInt(shapes.length);          // relocate a shape onto a hot region
-      const s = cloneShape(shapes[i]);
-      const hp = hotspot();
-      placeAt(s, hp);
-      if (hp.size) sizeShape(s, hp.size);
+      const i = randInt(shapes.length);         // relocate onto a hot region
+      const old = shapes[i];
+      const s = cloneShape(old);
+      const hp = hotspot(); placeAt(s, hp); if (hp.size) sizeShape(s, hp.size);
       shapes[i] = s;
+      box = boxUnion(shapeBBox(old), shapeBBox(s));
     } else {
-      const i = randInt(shapes.length);
-      const s = cloneShape(shapes[i]);
+      const i = randInt(shapes.length);         // local tweak (move/resize/recolor/alpha)
+      const old = shapes[i];
+      const s = cloneShape(old);
       mutateShape(s, amt);
       shapes[i] = s;
+      box = boxUnion(shapeBBox(old), shapeBBox(s));
     }
-    return { shapes };
+    return { genome: { shapes }, box };
   }
 
-  // Render any genome into a 2D context sized w x h (display / fitness / export).
+  // Backwards-compatible pure mutate (returns just the genome).
+  function mutate(genome, cfg, hotspot, amt) {
+    return proposeMutation(genome, cfg, hotspot, amt).genome;
+  }
+
+  function drawShape(ctx, w, h, s) {
+    ctx.fillStyle = 'rgba(' + (s.r | 0) + ',' + (s.g | 0) + ',' + (s.b | 0) + ',' + s.a + ')';
+    ctx.beginPath();
+    if (s.type === 'ellipse') {
+      ctx.ellipse(s.cx * w, s.cy * h, Math.max(0.5, s.rx * w), Math.max(0.5, s.ry * h), s.rot, 0, PI * 2);
+    } else {
+      const p = s.pts;
+      ctx.moveTo(p[0].x * w, p[0].y * h);
+      for (let k = 1; k < p.length; k++) ctx.lineTo(p[k].x * w, p[k].y * h);
+      ctx.closePath();
+    }
+    ctx.fill();
+  }
+
+  // Render a whole genome into a 2D context sized w x h (display / fitness / export).
   function renderGenome(ctx, w, h, genome) {
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, w, h);
     const shapes = genome.shapes;
-    for (let i = 0; i < shapes.length; i++) {
-      const s = shapes[i];
-      ctx.fillStyle = 'rgba(' + (s.r | 0) + ',' + (s.g | 0) + ',' + (s.b | 0) + ',' + s.a + ')';
-      ctx.beginPath();
-      if (s.type === 'ellipse') {
-        ctx.ellipse(s.cx * w, s.cy * h, Math.max(0.5, s.rx * w), Math.max(0.5, s.ry * h), s.rot, 0, PI * 2);
-      } else {
-        const p = s.pts;
-        ctx.moveTo(p[0].x * w, p[0].y * h);
-        for (let k = 1; k < p.length; k++) ctx.lineTo(p[k].x * w, p[k].y * h);
-        ctx.closePath();
-      }
-      ctx.fill();
-    }
+    for (let i = 0; i < shapes.length; i++) drawShape(ctx, w, h, shapes[i]);
   }
 
   class ArtEvolver {
     // target: { data: Uint8ClampedArray (RGBA), w, h }
     constructor(target, cfg) {
-      this.target = target;
       this.cfg = cfg;
-      this.evalCanvas = makeCanvas(target.w, target.h);
+      this._maxW = target.w; this._maxH = target.h;
+      this.evalCanvas = makeCanvas(this._maxW, this._maxH);
       this.ectx = this.evalCanvas.getContext('2d', { willReadFrequently: true });
       this.GRID = GRID;
       this._errMap = new Float64Array(GRID * GRID);
       this._errCum = new Float64Array(GRID * GRID);
       this._errTotal = 0;
+      const N = this._maxW * this._maxH;
+      this._bestErrArr = new Float32Array(N); // exact per-pixel error of the best (current scale)
+      this._fullBuf = new Float32Array(N);    // scratch for a full rescore
+      this._boxBuf = new Float32Array(N);     // scratch for a dirty-box rescore
       this._hotspot = this._sampleHotspot.bind(this);
-      this._computeBaseline(); // depends only on the target -> once per target
+      this._buildScales(target);
       this.reset();
     }
 
-    // Baseline = error of a solid "average colour" fill vs the target. That is a
-    // fair "0% = no better than a blank guess" reference and stays fixed per run,
-    // so Match% (rebased against it) is monotonic under keep-if-better.
-    _computeBaseline() {
-      const tgt = this.target.data;
-      const N = tgt.length / 4;
+    // ---------- multi-scale target pyramid ----------
+    _buildScales(full) {
+      const factors = (this.cfg.multiScale === false) ? [1.0] : SCALE_FACTORS;
+      this._scales = [];
+      for (const f of factors) {
+        const w = Math.max(8, Math.round(full.w * f));
+        const h = Math.max(8, Math.round(full.h * f));
+        const data = (f >= 1.0) ? full.data : this._downsample(full, w, h);
+        const bl = this._baselineFor(data);
+        this._scales.push({ w, h, data, baseline: bl.baseline, avg: bl.avg });
+      }
+    }
+    _downsample(full, w, h) {
+      const src = makeCanvas(full.w, full.h);
+      const sctx = src.getContext('2d');
+      const id = sctx.createImageData(full.w, full.h);
+      id.data.set(full.data);
+      sctx.putImageData(id, 0, 0);
+      const dst = makeCanvas(w, h);
+      const dctx = dst.getContext('2d', { willReadFrequently: true });
+      dctx.imageSmoothingEnabled = true;
+      dctx.clearRect(0, 0, w, h);
+      dctx.drawImage(src, 0, 0, full.w, full.h, 0, 0, w, h);
+      return dctx.getImageData(0, 0, w, h).data;
+    }
+    _baselineFor(data) {
+      const N = data.length / 4;
       let sr = 0, sg = 0, sb = 0;
-      for (let i = 0; i < tgt.length; i += 4) { sr += tgt[i]; sg += tgt[i + 1]; sb += tgt[i + 2]; }
+      for (let i = 0; i < data.length; i += 4) { sr += data[i]; sg += data[i + 1]; sb += data[i + 2]; }
       const ar = sr / N, ag = sg / N, ab = sb / N;
-      this._avg = { r: ar, g: ag, b: ab };  // reused to seed the background layer
       let base = 0;
-      for (let i = 0; i < tgt.length; i += 4) {
-        const dr = ar - tgt[i], dg = ag - tgt[i + 1], db = ab - tgt[i + 2];
+      for (let i = 0; i < data.length; i += 4) {
+        const dr = ar - data[i], dg = ag - data[i + 1], db = ab - data[i + 2];
         base += LUMA_R * dr * dr + LUMA_G * dg * dg + LUMA_B * db * db;
       }
-      this.baselineError = Math.max(base, 1e-6);
+      return { baseline: Math.max(base, 1e-6), avg: { r: ar, g: ag, b: ab } };
+    }
+    _applyScaleTarget(idx) {
+      const sc = this._scales[idx];
+      this.target = { data: sc.data, w: sc.w, h: sc.h };
+      this.w = sc.w; this.h = sc.h;
+      this.baselineError = sc.baseline;
+      this._avg = sc.avg;
     }
 
-    // Sample the target's colour at a normalized (x,y) point.
     _sampleTargetColor(x, y) {
-      const w = this.target.w, h = this.target.h, d = this.target.data;
+      const w = this.w, h = this.h, d = this.target.data;
       const px = clamp((x * w) | 0, 0, w - 1), py = clamp((y * h) | 0, 0, h - 1);
       const i = (py * w + px) * 4;
       return { r: d[i], g: d[i + 1], b: d[i + 2] };
     }
-
-    // Full-canvas polygon painted with the target's average colour — a base
-    // layer whose error equals the baseline, so seeding stays honest.
     _bgShape() {
       return {
         type: 'poly',
@@ -280,22 +332,24 @@
     }
 
     reset() {
+      this._scaleIdx = 0;
+      this._applyScaleTarget(0);
       this.best = this._randomGenome();
-      this.bestError = this._error(this.best);
+      this._fullRescore();                 // fills _bestErrArr + bestError at current scale
       this.attempts = 0;
       this.improvements = 0;
       this._lastMapImp = 0;
-      this._effAmt = this.cfg.mutationAmount; // annealer starts at the ceiling
-      this._winAtt = 0; this._winAcc = 0;     // 1/5-rule window counters
-      this._lastImpAtt = 0;                    // grow-on-stall tracking
-      this.history = [this.bestMatch];
+      this._effAmt = this.cfg.mutationAmount;
+      this._winAtt = 0; this._winAcc = 0;
+      this._lastImpAtt = 0;
+      this._scaleStartAtt = 0;
+      this._maxMatch = this.matchPct(this.bestError);
+      this.history = [this._maxMatch];
       this._computeErrorMap();
     }
 
     _randomGenome() {
       const n = clamp(this.cfg.numShapes | 0, this.cfg.minShapes, this.cfg.maxShapes);
-      // Seeded start (default): average-colour background + shapes coloured from
-      // the target at their own location. Gives a big head start over random.
       if (this.cfg.seed !== false && this._avg) {
         const shapes = [this._bgShape()];
         for (let i = 1; i < n; i++) {
@@ -314,39 +368,119 @@
       return { shapes };
     }
 
-    // Luma-weighted sum of squared per-channel differences (lower = better).
-    _error(genome) {
-      const w = this.target.w, h = this.target.h;
-      renderGenome(this.ectx, w, h, genome);
-      const cur = this.ectx.getImageData(0, 0, w, h).data;
-      const tgt = this.target.data;
-      let sse = 0;
-      for (let i = 0; i < cur.length; i += 4) {
-        const dr = cur[i] - tgt[i];
-        const dg = cur[i + 1] - tgt[i + 1];
-        const db = cur[i + 2] - tgt[i + 2];
-        sse += LUMA_R * dr * dr + LUMA_G * dg * dg + LUMA_B * db * db;
+    // Full render + rescore of the current best at the current scale. Rebuilds
+    // the exact per-pixel error cache and the scalar total.
+    _fullRescore() {
+      const w = this.w, h = this.h, ctx = this.ectx;
+      renderGenome(ctx, w, h, this.best);
+      const cur = ctx.getImageData(0, 0, w, h).data;
+      const tgt = this.target.data, arr = this._bestErrArr;
+      let total = 0;
+      for (let p = 0, i = 0; i < cur.length; i += 4, p++) {
+        const dr = cur[i] - tgt[i], dg = cur[i + 1] - tgt[i + 1], db = cur[i + 2] - tgt[i + 2];
+        const e = LUMA_R * dr * dr + LUMA_G * dg * dg + LUMA_B * db * db;
+        arr[p] = e; total += e;
       }
-      return sse;
+      this.bestError = total;
     }
 
-    // Coarse GRID x GRID map of where the best genome differs most from the
-    // target, plus a cumulative array for proportional hotspot sampling.
+    // Full error of an arbitrary genome (used by shape-count shrink trials).
+    _errorOf(shapes) {
+      const w = this.w, h = this.h, ctx = this.ectx;
+      renderGenome(ctx, w, h, { shapes });
+      const cur = ctx.getImageData(0, 0, w, h).data, tgt = this.target.data;
+      let t = 0;
+      for (let i = 0; i < cur.length; i += 4) {
+        const dr = cur[i] - tgt[i], dg = cur[i + 1] - tgt[i + 1], db = cur[i + 2] - tgt[i + 2];
+        t += LUMA_R * dr * dr + LUMA_G * dg * dg + LUMA_B * db * db;
+      }
+      return t;
+    }
+    _error(genome) { return this._errorOf(genome.shapes); }
+
+    // Render the affected box from the FULL genome at absolute coords (drawing
+    // only shapes whose bbox intersects the box; others contribute nothing
+    // there). No clip is used, so box pixels are bit-identical to a full render.
+    _renderBox(shapes, bx0, by0, bw, bh) {
+      const ctx = this.ectx, w = this.w, h = this.h;
+      ctx.clearRect(bx0, by0, bw, bh);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(bx0, by0, bw, bh);
+      const px0 = bx0 - 1, py0 = by0 - 1, px1 = bx0 + bw + 1, py1 = by0 + bh + 1;
+      for (let i = 0; i < shapes.length; i++) {
+        const s = shapes[i], bb = shapeBBox(s);
+        if (bb.x1 * w < px0 || bb.x0 * w > px1 || bb.y1 * h < py0 || bb.y0 * h > py1) continue;
+        drawShape(ctx, w, h, s);
+      }
+    }
+
+    // Incremental evaluation of a candidate whose change is bounded by `boxN`
+    // (normalized). Returns { total, kind:'box', bx0,by0,bw,bh } or null to
+    // signal the caller should fall back to a full rescore.
+    _evalBox(shapes, boxN) {
+      const w = this.w, h = this.h;
+      let bx0 = (Math.floor(boxN.x0 * w) - 1) | 0;
+      let by0 = (Math.floor(boxN.y0 * h) - 1) | 0;
+      let bx1 = (Math.ceil(boxN.x1 * w) + 1) | 0;
+      let by1 = (Math.ceil(boxN.y1 * h) + 1) | 0;
+      if (bx0 < 0) bx0 = 0; if (by0 < 0) by0 = 0;
+      if (bx1 > w) bx1 = w; if (by1 > h) by1 = h;
+      const bw = bx1 - bx0, bh = by1 - by0;
+      if (bw <= 0 || bh <= 0) return { total: this.bestError, kind: 'noop' };
+      if (bw * bh >= BOX_FULL_FRAC * w * h) return null; // not worth localizing
+      this._renderBox(shapes, bx0, by0, bw, bh);
+      const cur = this.ectx.getImageData(bx0, by0, bw, bh).data;
+      const tgt = this.target.data, arr = this._bestErrArr, buf = this._boxBuf;
+      let oldB = 0, newB = 0, bi = 0;
+      for (let yy = 0; yy < bh; yy++) {
+        const trow = (by0 + yy) * w;
+        for (let xx = 0; xx < bw; xx++) {
+          const tx = bx0 + xx;
+          const ti = (trow + tx) * 4, ci = bi * 4;
+          const dr = cur[ci] - tgt[ti], dg = cur[ci + 1] - tgt[ti + 1], db = cur[ci + 2] - tgt[ti + 2];
+          const e = LUMA_R * dr * dr + LUMA_G * dg * dg + LUMA_B * db * db;
+          buf[bi] = e; newB += e; oldB += arr[trow + tx]; bi++;
+        }
+      }
+      return { total: this.bestError - oldB + newB, kind: 'box', bx0, by0, bw, bh };
+    }
+
+    _evalFull(shapes) {
+      const w = this.w, h = this.h, ctx = this.ectx;
+      renderGenome(ctx, w, h, { shapes });
+      const cur = ctx.getImageData(0, 0, w, h).data, tgt = this.target.data, buf = this._fullBuf;
+      let total = 0;
+      for (let p = 0, i = 0; i < cur.length; i += 4, p++) {
+        const dr = cur[i] - tgt[i], dg = cur[i + 1] - tgt[i + 1], db = cur[i + 2] - tgt[i + 2];
+        const e = LUMA_R * dr * dr + LUMA_G * dg * dg + LUMA_B * db * db;
+        buf[p] = e; total += e;
+      }
+      return { total, kind: 'full' };
+    }
+
+    // Commit an accepted evaluation into the per-pixel error cache + total.
+    _commit(ev) {
+      const arr = this._bestErrArr, w = this.w;
+      if (ev.kind === 'box') {
+        const buf = this._boxBuf; let bi = 0;
+        for (let yy = 0; yy < ev.bh; yy++) {
+          const base = (ev.by0 + yy) * w + ev.bx0;
+          for (let xx = 0; xx < ev.bw; xx++) arr[base + xx] = buf[bi++];
+        }
+      } else if (ev.kind === 'full') {
+        const buf = this._fullBuf, n = this.w * this.h;
+        for (let p = 0; p < n; p++) arr[p] = buf[p];
+      }
+      this.bestError = ev.total;
+    }
+
+    // Error map is derived from the cached per-pixel error (no render).
     _computeErrorMap() {
-      const G = this.GRID, w = this.target.w, h = this.target.h;
-      renderGenome(this.ectx, w, h, this.best);
-      const cur = this.ectx.getImageData(0, 0, w, h).data;
-      const tgt = this.target.data;
+      const G = this.GRID, w = this.w, h = this.h, arr = this._bestErrArr;
       const map = this._errMap; map.fill(0);
       for (let y = 0; y < h; y++) {
-        const gy = (y * G / h) | 0;
-        const row = y * w;
-        for (let x = 0; x < w; x++) {
-          const i = (row + x) * 4;
-          const dr = cur[i] - tgt[i], dg = cur[i + 1] - tgt[i + 1], db = cur[i + 2] - tgt[i + 2];
-          const e = LUMA_R * dr * dr + LUMA_G * dg * dg + LUMA_B * db * db;
-          map[gy * G + ((x * G / w) | 0)] += e;
-        }
+        const gy = (y * G / h) | 0, row = y * w;
+        for (let x = 0; x < w; x++) map[gy * G + ((x * G / w) | 0)] += arr[row + x];
       }
       let total = 0; const cum = this._errCum;
       for (let k = 0; k < G * G; k++) { total += map[k]; cum[k] = total; }
@@ -358,8 +492,6 @@
       const k = pickWeightedIndex(this._errCum, this._errTotal);
       if (k < 0) return { x: Math.random(), y: Math.random(), size: 0.12 };
       const gx = k % G, gy = (k / G) | 0;
-      // Estimate the hot region's extent from contiguous hot neighbours so the
-      // caller can size the shape: isolated hot cell -> tiny; broad area -> big.
       const map = this._errMap, thr = map[k] * 0.4;
       let hot = 0;
       for (let dy = -1; dy <= 1; dy++) {
@@ -371,29 +503,37 @@
         }
       }
       const cell = 1 / G;
-      return {
-        x: (gx + Math.random()) / G,
-        y: (gy + Math.random()) / G,
-        size: cell * (0.6 + hot * 0.5)  // ~0.6..4.6 cells
-      };
+      return { x: (gx + Math.random()) / G, y: (gy + Math.random()) / G, size: cell * (0.6 + hot * 0.5) };
     }
 
-    // Rebased, honest Match%: 0 = no better than a blank average-colour guess,
-    // 100 = perfect. Clamped at 0 for the (rare) case where the random start is
-    // worse than the baseline. Monotonic because baselineError is fixed and
-    // bestError only decreases.
-    matchPct(sse) {
-      return Math.max(0, 1 - sse / this.baselineError) * 100;
-    }
+    matchPct(sse) { return Math.max(0, 1 - sse / this.baselineError) * 100; }
 
-    get bestMatch() { return this.matchPct(this.bestError); }
+    // Monotonic display value: a running max of the raw current-scale match, so
+    // a resolution step-up (metric change) never reads as a regression.
+    get bestMatch() {
+      const raw = this.matchPct(this.bestError);
+      if (raw > this._maxMatch) this._maxMatch = raw;
+      return this._maxMatch;
+    }
     get shapeCount() { return this.best.shapes.length; }
     get effectiveMutation() { return this._effAmt; }
+    get scaleLevel() { return this.w; }
 
     draw(ctx, w, h) { renderGenome(ctx, w, h, this.best); }
 
-    // Append a batch of invisible (alpha 0) shapes at hot regions to add detail
-    // capacity. Error is unchanged (alpha 0) -> Match% stays monotonic.
+    // Propose one mutation of the current best (genome + affected box).
+    _propose() { return proposeMutation(this.best, this.cfg, this._hotspot, this._effAmt); }
+
+    _stepUpScale() {
+      if (this._scaleIdx >= this._scales.length - 1) return;
+      this._scaleIdx++;
+      this._applyScaleTarget(this._scaleIdx);
+      this._fullRescore();          // exact cache rebuild at the new scale
+      this._computeErrorMap();
+      this._scaleStartAtt = this.attempts;
+      // _maxMatch is preserved; bestMatch holds it until fine-scale catches up.
+    }
+
     _growBatch() {
       const room = this.cfg.maxShapes - this.best.shapes.length;
       const k = Math.min(GROW_BATCH, room);
@@ -404,32 +544,30 @@
         const hp = this._sampleHotspot();
         placeAt(s, hp);
         if (hp.size) sizeShape(s, hp.size);
-        s.a = 0;
+        s.a = 0; // invisible -> error unchanged -> monotonic
         shapes.push(s);
       }
       this.best = { shapes };
     }
 
-    // Run `nAttempts` mutate/keep-if-better trials. Returns true if improved.
     step(nAttempts) {
       let improved = false;
-      const hs = this._hotspot;
+      const fast = this.cfg.fastEval !== false;
       for (let i = 0; i < nAttempts; i++) {
-        const cand = mutate(this.best, this.cfg, hs, this._effAmt);
-        const err = this._error(cand);
+        const prop = this._propose();
+        let ev = fast ? this._evalBox(prop.genome.shapes, prop.box) : null;
+        if (!ev) ev = this._evalFull(prop.genome.shapes);
         this.attempts++;
         this._winAtt++;
-        if (err < this.bestError) {
-          this.best = cand;
-          this.bestError = err;
+        if (ev.total < this.bestError) {
+          this.best = prop.genome;
+          this._commit(ev);
           this.improvements++;
           this._winAcc++;
           this._lastImpAtt = this.attempts;
           improved = true;
         }
-        // 1/5-success-rule annealing: grow effective sigma when accepts are
-        // frequent (early), shrink it when they're rare (converging). The
-        // slider (cfg.mutationAmount) is the CEILING.
+        // 1/5-success-rule annealing (slider is the ceiling)
         if (this._winAtt >= ANNEAL_WINDOW) {
           const rate = this._winAcc / this._winAtt;
           const ceil = this.cfg.mutationAmount;
@@ -438,9 +576,13 @@
           else this._effAmt = Math.max(floor, this._effAmt * 0.85);
           this._winAtt = 0; this._winAcc = 0;
         }
-        // Grow-on-stall: only add shape capacity once progress plateaus.
-        if (this.attempts - this._lastImpAtt >= STALL_ATTEMPTS &&
-            this.best.shapes.length < this.cfg.maxShapes) {
+        // On stall (or a scale running too long): step up resolution, else grow.
+        const stalled = this.attempts - this._lastImpAtt >= STALL_ATTEMPTS;
+        const aged = this.attempts - this._scaleStartAtt >= SCALE_MAX_ATT;
+        if (this._scaleIdx < this._scales.length - 1 && (stalled || aged)) {
+          this._stepUpScale();
+          this._lastImpAtt = this.attempts;
+        } else if (stalled && this.best.shapes.length < this.cfg.maxShapes) {
           this._growBatch();
           this._lastImpAtt = this.attempts;
         }
@@ -456,14 +598,7 @@
       return improved;
     }
 
-    // ---- progress-preserving settings changes (no wipe, no baseline change) ----
-
-    // Change the shape budget WITHOUT throwing away the evolved picture:
-    //  • grow  -> append invisible (alpha 0) shapes at hot regions; error is
-    //             unchanged, so Match% doesn't drop; they evolve in over time.
-    //  • shrink -> remove only the lowest-impact shapes whose removal does NOT
-    //             raise error; anything left is trimmed later by evolution.
-    // Either way bestError never increases -> Match% stays monotonic.
+    // ---- progress-preserving settings changes ----
     setShapeCount(n, minShapes, maxShapes) {
       this.cfg.numShapes = n;
       this.cfg.minShapes = minShapes;
@@ -476,33 +611,28 @@
           const hp = this._sampleHotspot();
           placeAt(s, hp);
           if (hp.size) sizeShape(s, hp.size);
-          s.a = 0; // invisible -> zero pixel contribution -> error unchanged
+          s.a = 0;
           shapes.push(s);
         }
         this.best = { shapes };
       } else if (shapes.length > n) {
         const impact = (s) => s.a * (s.type === 'ellipse'
-          ? Math.max(1e-4, s.rx * s.ry)
-          : Math.max(1e-4, polyArea(s)));
+          ? Math.max(1e-4, s.rx * s.ry) : Math.max(1e-4, polyArea(s)));
         const order = shapes.map((_, i) => i).sort((a, b) => impact(shapes[a]) - impact(shapes[b]));
         const removed = new Set();
         for (const i of order) {
           if (shapes.length - removed.size <= n) break;
-          const trial = { shapes: shapes.filter((_, j) => j !== i && !removed.has(j)) };
-          const e = this._error(trial);
+          const trial = shapes.filter((_, j) => j !== i && !removed.has(j));
+          const e = this._errorOf(trial);
           if (e <= this.bestError + 1e-9) { removed.add(i); this.bestError = e; }
         }
         this.best = { shapes: shapes.filter((_, j) => !removed.has(j)) };
       }
-
-      this.bestError = this._error(this.best); // exact resync (<= previous)
+      this._fullRescore();          // exact cache resync (<= previous error)
       this._computeErrorMap();
       this._lastMapImp = this.improvements;
     }
 
-    // Change the shape style WITHOUT touching existing shapes — only newly
-    // created shapes (growth / add-mutations) adopt the new style, so the mix
-    // shifts gradually and no progress is lost.
     setStyle(shapeKind, vertices) {
       this.cfg.shapeKind = shapeKind;
       if (vertices) this.cfg.vertices = vertices;
