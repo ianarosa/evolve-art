@@ -57,8 +57,9 @@
 
       <!-- Transport -->
       <div class="card transport">
-        <button id="playBtn" class="primary">▶ Play</button>
-        <button id="resetBtn">↺ Reset</button>
+        <button id="playBtn" class="primary" title="Start or pause the evolution.">▶ Play</button>
+        <button id="resetBtn" title="Throw away the current picture and start over from fresh random shapes.">↺ Reset</button>
+        <button id="saveBtn" title="Download the current evolving picture as a high-resolution PNG.">💾 Save</button>
       </div>
 
       <!-- Readouts -->
@@ -117,12 +118,13 @@
           <input type="range" id="numShapes" min="20" max="200" step="5" value="60" />
         </div>
 
-        <div class="ctrl" title="Shape corners. Triangles are simple and fast; polygons have more corners for finer curves but evolve slower.">
+        <div class="ctrl" title="What the picture is built from. Triangles/polygons are angular; ellipses are smooth and reproduce faces & photos far better; Mixed uses both.">
           <label>Shape style</label>
           <select id="shapeStyle">
-            <option value="3">Triangles (3 corners)</option>
-            <option value="4">Quads (4 corners)</option>
-            <option value="6">Polygons (6 corners)</option>
+            <option value="ellipse" selected>Ellipses (smooth — best for photos)</option>
+            <option value="tri">Triangles (3 corners)</option>
+            <option value="poly">Polygons (6 corners)</option>
+            <option value="mixed">Mixed (ellipses + polygons)</option>
           </select>
         </div>
 
