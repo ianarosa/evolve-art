@@ -13,13 +13,14 @@
 
   // ---------------- config (single source of truth) ----------------
   const cfg = {
-    numShapes: 60,
+    numShapes: 90,         // modest default; the engine grows on stall (benchmark: 50≈100≈200 at equal attempts)
     shapeKind: 'mixed',    // 'tri' | 'poly' | 'ellipse' | 'mixed'
     vertices: 3,           // used by 'tri'(3) / 'poly'(6)
-    mutationAmount: 0.08,
+    mutationAmount: 0.18,  // CEILING for the auto-annealer (starts here, shrinks as it converges)
     speed: 60,             // mutation attempts per frame/tick
-    minShapes: 24,
-    maxShapes: 84
+    seed: true,            // seed the first genome from target colours
+    minShapes: 36,
+    maxShapes: 126
   };
   function applyShapeBounds() {
     cfg.maxShapes = Math.min(240, Math.round(cfg.numShapes * 1.4));

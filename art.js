@@ -15,8 +15,11 @@
 
   // ---- perception + tuning constants ----
   const LUMA_R = 0.2126, LUMA_G = 0.7152, LUMA_B = 0.0722; // Rec.709
-  const GRID = 16;          // coarse error-map resolution (GRID x GRID)
+  const GRID = 32;          // error-map resolution (32x32 -> ~6px cells, finer than an eye)
   const MAP_REFRESH = 15;   // recompute the error map every N accepted improvements
+  const ANNEAL_WINDOW = 250;   // attempts per 1/5-rule mutation-size update
+  const STALL_ATTEMPTS = 3000; // grow the shape budget after this many attempts w/o improvement
+  const GROW_BATCH = 8;        // shapes appended per grow-on-stall event
 
   const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
   const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -109,6 +112,29 @@
     }
   }
 
+  // Scale a shape to roughly `size` (fraction of canvas) about its centre — lets
+  // shapes placed on a hot cell match the feature's scale (tiny for eyes/edges,
+  // bigger for flat areas).
+  function sizeShape(s, size) {
+    if (s.type === 'ellipse') {
+      s.rx = clamp(size * (0.7 + Math.random() * 0.6), 0.01, 0.7);
+      s.ry = clamp(size * (0.7 + Math.random() * 0.6), 0.01, 0.7);
+      return;
+    }
+    const p = s.pts, n = p.length;
+    let cx = 0, cy = 0;
+    for (let i = 0; i < n; i++) { cx += p[i].x; cy += p[i].y; }
+    cx /= n; cy /= n;
+    let rad = 0;
+    for (let i = 0; i < n; i++) rad += Math.hypot(p[i].x - cx, p[i].y - cy);
+    rad /= n;
+    const scale = rad > 1e-6 ? (size / rad) : 1;
+    for (let i = 0; i < n; i++) {
+      p[i].x = clamp01(cx + (p[i].x - cx) * scale);
+      p[i].y = clamp01(cy + (p[i].y - cy) * scale);
+    }
+  }
+
   function tweakColor(s, amt) {
     const key = ['r', 'g', 'b'][randInt(3)];
     s[key] = clampByte(s[key] + rnd() * amt * 255);
@@ -144,17 +170,18 @@
   }
 
   // Produce a mutated copy of `genome` (copy-on-write: only the touched
-  // shape is deep-cloned). `hotspot`, when supplied, returns {x,y} in [0,1]
-  // biased toward high-error regions — it changes only the PROPOSAL, never
-  // the accept/reject rule, so monotonicity is preserved.
-  function mutate(genome, cfg, hotspot) {
+  // shape is deep-cloned). `hotspot`, when supplied, returns {x,y,size} biased
+  // toward high-error regions; `amt` is the effective (annealed) mutation size,
+  // defaulting to cfg.mutationAmount. Both change only the PROPOSAL, never the
+  // accept/reject rule, so monotonicity is preserved.
+  function mutate(genome, cfg, hotspot, amt) {
     const shapes = genome.shapes.slice();
-    const amt = cfg.mutationAmount;
+    if (amt === undefined) amt = cfg.mutationAmount;
     const roll = Math.random();
 
     if (roll < 0.08 && shapes.length < cfg.maxShapes) {
       const s = randomShape(cfg);
-      if (hotspot) placeAt(s, hotspot());       // place new shape on a hot region
+      if (hotspot) { const hp = hotspot(); placeAt(s, hp); if (hp.size) sizeShape(s, hp.size); }
       shapes.splice(randInt(shapes.length + 1), 0, s);
     } else if (roll < 0.14 && shapes.length > cfg.minShapes) {
       shapes.splice(randInt(shapes.length), 1);
@@ -165,7 +192,9 @@
     } else if (roll < 0.26 && hotspot) {
       const i = randInt(shapes.length);          // relocate a shape onto a hot region
       const s = cloneShape(shapes[i]);
-      placeAt(s, hotspot());
+      const hp = hotspot();
+      placeAt(s, hp);
+      if (hp.size) sizeShape(s, hp.size);
       shapes[i] = s;
     } else {
       const i = randInt(shapes.length);
@@ -223,6 +252,7 @@
       let sr = 0, sg = 0, sb = 0;
       for (let i = 0; i < tgt.length; i += 4) { sr += tgt[i]; sg += tgt[i + 1]; sb += tgt[i + 2]; }
       const ar = sr / N, ag = sg / N, ab = sb / N;
+      this._avg = { r: ar, g: ag, b: ab };  // reused to seed the background layer
       let base = 0;
       for (let i = 0; i < tgt.length; i += 4) {
         const dr = ar - tgt[i], dg = ag - tgt[i + 1], db = ab - tgt[i + 2];
@@ -231,18 +261,54 @@
       this.baselineError = Math.max(base, 1e-6);
     }
 
+    // Sample the target's colour at a normalized (x,y) point.
+    _sampleTargetColor(x, y) {
+      const w = this.target.w, h = this.target.h, d = this.target.data;
+      const px = clamp((x * w) | 0, 0, w - 1), py = clamp((y * h) | 0, 0, h - 1);
+      const i = (py * w + px) * 4;
+      return { r: d[i], g: d[i + 1], b: d[i + 2] };
+    }
+
+    // Full-canvas polygon painted with the target's average colour — a base
+    // layer whose error equals the baseline, so seeding stays honest.
+    _bgShape() {
+      return {
+        type: 'poly',
+        pts: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }],
+        r: this._avg.r, g: this._avg.g, b: this._avg.b, a: 1
+      };
+    }
+
     reset() {
       this.best = this._randomGenome();
       this.bestError = this._error(this.best);
       this.attempts = 0;
       this.improvements = 0;
       this._lastMapImp = 0;
+      this._effAmt = this.cfg.mutationAmount; // annealer starts at the ceiling
+      this._winAtt = 0; this._winAcc = 0;     // 1/5-rule window counters
+      this._lastImpAtt = 0;                    // grow-on-stall tracking
       this.history = [this.bestMatch];
       this._computeErrorMap();
     }
 
     _randomGenome() {
       const n = clamp(this.cfg.numShapes | 0, this.cfg.minShapes, this.cfg.maxShapes);
+      // Seeded start (default): average-colour background + shapes coloured from
+      // the target at their own location. Gives a big head start over random.
+      if (this.cfg.seed !== false && this._avg) {
+        const shapes = [this._bgShape()];
+        for (let i = 1; i < n; i++) {
+          const s = randomShape(this.cfg);
+          const x = Math.random(), y = Math.random();
+          placeAt(s, { x, y });
+          const c = this._sampleTargetColor(x, y);
+          s.r = c.r; s.g = c.g; s.b = c.b;
+          s.a = 0.35 + Math.random() * 0.3;
+          shapes.push(s);
+        }
+        return { shapes };
+      }
       const shapes = new Array(n);
       for (let i = 0; i < n; i++) shapes[i] = randomShape(this.cfg);
       return { shapes };
@@ -290,9 +356,26 @@
     _sampleHotspot() {
       const G = this.GRID;
       const k = pickWeightedIndex(this._errCum, this._errTotal);
-      if (k < 0) return { x: Math.random(), y: Math.random() };
+      if (k < 0) return { x: Math.random(), y: Math.random(), size: 0.12 };
       const gx = k % G, gy = (k / G) | 0;
-      return { x: (gx + Math.random()) / G, y: (gy + Math.random()) / G };
+      // Estimate the hot region's extent from contiguous hot neighbours so the
+      // caller can size the shape: isolated hot cell -> tiny; broad area -> big.
+      const map = this._errMap, thr = map[k] * 0.4;
+      let hot = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = gx + dx, ny = gy + dy;
+          if (nx < 0 || ny < 0 || nx >= G || ny >= G) continue;
+          if (map[ny * G + nx] >= thr) hot++;
+        }
+      }
+      const cell = 1 / G;
+      return {
+        x: (gx + Math.random()) / G,
+        y: (gy + Math.random()) / G,
+        size: cell * (0.6 + hot * 0.5)  // ~0.6..4.6 cells
+      };
     }
 
     // Rebased, honest Match%: 0 = no better than a blank average-colour guess,
@@ -305,22 +388,61 @@
 
     get bestMatch() { return this.matchPct(this.bestError); }
     get shapeCount() { return this.best.shapes.length; }
+    get effectiveMutation() { return this._effAmt; }
 
     draw(ctx, w, h) { renderGenome(ctx, w, h, this.best); }
+
+    // Append a batch of invisible (alpha 0) shapes at hot regions to add detail
+    // capacity. Error is unchanged (alpha 0) -> Match% stays monotonic.
+    _growBatch() {
+      const room = this.cfg.maxShapes - this.best.shapes.length;
+      const k = Math.min(GROW_BATCH, room);
+      if (k <= 0) return;
+      const shapes = this.best.shapes.slice();
+      for (let i = 0; i < k; i++) {
+        const s = randomShape(this.cfg);
+        const hp = this._sampleHotspot();
+        placeAt(s, hp);
+        if (hp.size) sizeShape(s, hp.size);
+        s.a = 0;
+        shapes.push(s);
+      }
+      this.best = { shapes };
+    }
 
     // Run `nAttempts` mutate/keep-if-better trials. Returns true if improved.
     step(nAttempts) {
       let improved = false;
       const hs = this._hotspot;
       for (let i = 0; i < nAttempts; i++) {
-        const cand = mutate(this.best, this.cfg, hs);
+        const cand = mutate(this.best, this.cfg, hs, this._effAmt);
         const err = this._error(cand);
         this.attempts++;
+        this._winAtt++;
         if (err < this.bestError) {
           this.best = cand;
           this.bestError = err;
           this.improvements++;
+          this._winAcc++;
+          this._lastImpAtt = this.attempts;
           improved = true;
+        }
+        // 1/5-success-rule annealing: grow effective sigma when accepts are
+        // frequent (early), shrink it when they're rare (converging). The
+        // slider (cfg.mutationAmount) is the CEILING.
+        if (this._winAtt >= ANNEAL_WINDOW) {
+          const rate = this._winAcc / this._winAtt;
+          const ceil = this.cfg.mutationAmount;
+          const floor = Math.max(0.01, ceil * 0.08);
+          if (rate > 0.2) this._effAmt = Math.min(ceil, this._effAmt * 1.3);
+          else this._effAmt = Math.max(floor, this._effAmt * 0.85);
+          this._winAtt = 0; this._winAcc = 0;
+        }
+        // Grow-on-stall: only add shape capacity once progress plateaus.
+        if (this.attempts - this._lastImpAtt >= STALL_ATTEMPTS &&
+            this.best.shapes.length < this.cfg.maxShapes) {
+          this._growBatch();
+          this._lastImpAtt = this.attempts;
         }
       }
       if (improved) {
@@ -351,8 +473,10 @@
       if (shapes.length < n) {
         while (shapes.length < n) {
           const s = randomShape(this.cfg);
+          const hp = this._sampleHotspot();
+          placeAt(s, hp);
+          if (hp.size) sizeShape(s, hp.size);
           s.a = 0; // invisible -> zero pixel contribution -> error unchanged
-          placeAt(s, this._sampleHotspot());
           shapes.push(s);
         }
         this.best = { shapes };

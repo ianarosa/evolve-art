@@ -113,9 +113,9 @@
 
       <!-- Controls -->
       <div class="card">
-        <div class="ctrl" title="How many glass shapes the picture is allowed to use. More = finer detail, but each attempt is slower.">
-          <label>Number of shapes <span class="v" id="shapesVal">60</span></label>
-          <input type="range" id="numShapes" min="20" max="200" step="5" value="60" />
+        <div class="ctrl" title="Starting shape budget. The engine adds more automatically when progress stalls, so you don't need to max this — bigger just costs speed for little gain.">
+          <label>Number of shapes <span class="v" id="shapesVal">90</span></label>
+          <input type="range" id="numShapes" min="20" max="200" step="5" value="90" />
         </div>
 
         <div class="ctrl" title="What the picture is built from. Triangles/polygons are angular; ellipses are smooth and reproduce faces & photos far better; Mixed uses both.">
@@ -128,9 +128,9 @@
           </select>
         </div>
 
-        <div class="ctrl" title="How big each random tweak is. Higher = bolder jumps that explore fast but overshoot; lower = fine detailing that refines slowly.">
-          <label>Mutation amount <span class="v" id="mutVal">0.08</span></label>
-          <input type="range" id="mutAmount" min="0.01" max="0.30" step="0.01" value="0.08" />
+        <div class="ctrl" title="Maximum tweak size. The engine auto-anneals from here downward — bold jumps early to explore, fine tweaks later to refine. Raise the ceiling for more early exploration.">
+          <label>Mutation ceiling <span class="v" id="mutVal">0.18</span></label>
+          <input type="range" id="mutAmount" min="0.01" max="0.30" step="0.01" value="0.18" />
         </div>
 
         <div class="ctrl" title="How many tweaks to try per animation frame. Higher = evolves faster but uses more CPU. Doesn't change the result, only the pace.">
