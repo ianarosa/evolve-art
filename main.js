@@ -56,7 +56,9 @@
     gps: $('gps'), gpsVal: $('gpsVal'),
     roGen: $('roGen'), roBest: $('roBest'), roMean: $('roMean'),
     roDist: $('roDist'), roDiv: $('roDiv'),
-    divBar: $('divBar'), divHint: $('divHint')
+    divBar: $('divBar'), divHint: $('divHint'),
+    status: $('status'), statusText: $('statusText'),
+    intro: $('intro'), introClose: $('introClose'), helpBtn: $('helpBtn')
   };
 
   // ---------------- state ----------------
@@ -154,6 +156,20 @@
     ctx.moveTo(ox, oy - R - 3 * dpr); ctx.lineTo(ox, oy + R + 3 * dpr);
     ctx.stroke();
 
+    // faint "BEST" tag so newcomers know what the crosshair marks
+    ctx.font = `700 ${11 * dpr}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    const label = 'BEST';
+    const ly = oy - R - 5 * dpr;
+    ctx.lineWidth = 3 * dpr;
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.strokeText(label, ox, ly);
+    ctx.fillStyle = '#ffd7de';
+    ctx.fillText(label, ox, ly);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+
     // current best (cyan, on top)
     const b = ga.bestOfGen;
     const bx = toPx(b.x), by = toPy(b.y);
@@ -236,7 +252,41 @@
     el.divBar.style.width = (frac * 100).toFixed(1) + '%';
     el.divHint.textContent = frac < 0.06
       ? 'Converged — the population has collapsed onto one point.'
-      : 'Higher = still exploring. When this collapses, evolution has converged.';
+      : 'How spread out the population is — low means everyone\'s clustered on one spot.';
+
+    updateStatus(frac);
+  }
+
+  // Plain-English narration of the current state.
+  // Uses distance-from-the-true-optimum (in domain units), which behaves
+  // consistently across landscapes with wildly different fitness scales.
+  function updateStatus(frac) {
+    const range = landscape.domain.max - landscape.domain.min;
+    const dx = ga.bestOfGen.x - landscape.optimum.x;
+    const dy = ga.bestOfGen.y - landscape.optimum.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const converged = frac < 0.08;
+
+    let cls, text;
+    if (dist < range * 0.035 && frac < 0.14) {
+      cls = 'solved';
+      text = '✅ Solved! The swarm reached the best possible peak.';
+    } else if (converged && dist > range * 0.06) {
+      cls = 'stuck';
+      text = '⚠️ Stuck on a lower hill — evolution converged on a trap, not the true best. Try raising mutation, or hit Reset.';
+    } else if (frac > 0.45) {
+      cls = 'explore';
+      text = '🔍 Exploring — the population is spread out, searching for high ground.';
+    } else {
+      cls = 'climb';
+      text = '⛰️ Climbing — the dots have found a hill and are heading up it.';
+    }
+
+    if (el.status.dataset.cls !== cls) {
+      el.status.className = 'status ' + cls;
+      el.status.dataset.cls = cls;
+    }
+    el.statusText.textContent = text;
   }
 
   // ---------------- animation loop ----------------
@@ -324,6 +374,17 @@
     el.tournRow.style.display = cfg.selection === 'tournament' ? '' : 'none';
   });
   el.crossover.addEventListener('change', () => { cfg.crossover = el.crossover.checked; });
+
+  // ---------------- intro overlay ----------------
+  function showIntro(on) { el.intro.hidden = !on; }
+  let seenIntro = false;
+  try { seenIntro = localStorage.getItem('ga_seen_intro') === '1'; } catch (e) { /* private mode */ }
+  showIntro(!seenIntro);
+  el.introClose.addEventListener('click', () => {
+    showIntro(false);
+    try { localStorage.setItem('ga_seen_intro', '1'); } catch (e) { /* ignore */ }
+  });
+  el.helpBtn.addEventListener('click', () => showIntro(true));
 
   // ---------------- boot ----------------
   resize();

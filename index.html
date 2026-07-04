@@ -8,6 +8,22 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <!-- First-load / (?) explainer -->
+  <div id="intro" hidden>
+    <div class="intro-card">
+      <h2>🧬 What am I watching?</h2>
+      <p>Each <b>white dot</b> is a guess at the best location on the colored map.
+      Brighter (yellow) areas are better; dark purple areas are worse.</p>
+      <p>Every <b>generation</b>, the best guesses "reproduce" with small random
+      changes, and the worst guesses die off. Over time the whole swarm evolves
+      toward the brightest area.</p>
+      <p>That's a <b>genetic algorithm</b> — evolution used as a search. Hit
+      <b>Play</b> and watch the dots climb. The line at the top tells you, in
+      plain words, what's happening.</p>
+      <button id="introClose" class="primary">Got it — let's evolve</button>
+    </div>
+  </div>
+
   <div id="app">
     <!-- ==================== STAGE (canvas) ==================== -->
     <section id="stage">
@@ -24,14 +40,23 @@
         <div class="bar"></div>
         <span>high fitness</span>
       </div>
+      <p id="colorbar-note">Purple = bad spots, yellow = the best spots. The dots want to reach the yellow.</p>
     </section>
 
     <!-- ==================== CONTROL PANEL ==================== -->
     <aside id="panel">
       <header id="brand">
-        <h1>🧬 GA Sandbox</h1>
+        <div class="brand-row">
+          <h1>🧬 GA Sandbox</h1>
+          <button id="helpBtn" title="What am I watching?">?</button>
+        </div>
         <p class="tag">Watch a population evolve up a fitness landscape.</p>
       </header>
+
+      <!-- Live plain-English status -->
+      <div id="status" class="status explore">
+        <span id="statusText">🔍 Exploring — searching for high ground…</span>
+      </div>
 
       <!-- Transport -->
       <div class="card transport">
@@ -43,10 +68,26 @@
       <!-- Readouts -->
       <div class="card">
         <div class="readout-grid">
-          <div class="ro"><span class="ro-label">Generation</span><span class="ro-val" id="roGen">0</span></div>
-          <div class="ro"><span class="ro-label">Best fitness</span><span class="ro-val" id="roBest">–</span></div>
-          <div class="ro"><span class="ro-label">Mean fitness</span><span class="ro-val" id="roMean">–</span></div>
-          <div class="ro"><span class="ro-label">Best → optimum</span><span class="ro-val" id="roDist">–</span></div>
+          <div class="ro">
+            <span class="ro-label">Generation</span>
+            <span class="ro-val" id="roGen">0</span>
+            <span class="ro-cap">rounds of evolution so far</span>
+          </div>
+          <div class="ro">
+            <span class="ro-label">Best fitness</span>
+            <span class="ro-val" id="roBest">–</span>
+            <span class="ro-cap">score of the single best individual (higher = better)</span>
+          </div>
+          <div class="ro">
+            <span class="ro-label">Mean fitness</span>
+            <span class="ro-val" id="roMean">–</span>
+            <span class="ro-cap">average score across the whole population</span>
+          </div>
+          <div class="ro">
+            <span class="ro-label">Gap to true best</span>
+            <span class="ro-val" id="roDist">–</span>
+            <span class="ro-cap">how far the best individual still is from the perfect answer (0 = perfect)</span>
+          </div>
         </div>
         <canvas id="chart"></canvas>
         <div class="chart-key">
@@ -60,33 +101,33 @@
             <span id="roDiv">–</span>
           </div>
           <div class="div-track"><div id="divBar" class="div-fill"></div></div>
-          <p class="hint" id="divHint">Higher = still exploring. When this collapses, evolution has converged.</p>
+          <p class="hint" id="divHint">How spread out the population is — low means everyone's clustered on one spot.</p>
         </div>
       </div>
 
       <!-- Controls -->
       <div class="card">
-        <div class="ctrl">
+        <div class="ctrl" title="The problem to solve: the shape of the map the dots are climbing. Single peak is easy; Rastrigin is full of traps.">
           <label>Landscape</label>
           <select id="landscapeSel"></select>
         </div>
 
-        <div class="ctrl">
+        <div class="ctrl" title="How many dots (candidate answers) are in the swarm. More = searches more of the map at once, but runs slower.">
           <label>Population size <span class="v" id="popVal">150</span></label>
           <input type="range" id="popSize" min="10" max="500" step="10" value="150" />
         </div>
 
-        <div class="ctrl">
+        <div class="ctrl" title="How often offspring get a random tweak. Higher = more exploration, less likely to get stuck; too high = never settles down.">
           <label>Mutation rate <span class="v" id="mrVal">0.15</span></label>
           <input type="range" id="mutRate" min="0" max="1" step="0.01" value="0.15" />
         </div>
 
-        <div class="ctrl">
+        <div class="ctrl" title="How big each random tweak is. Higher = bigger jumps that can escape traps but overshoot; lower = fine-tuning that can get stuck.">
           <label>Mutation strength (σ) <span class="v" id="msVal">0.30</span></label>
           <input type="range" id="mutSigma" min="0.01" max="1.5" step="0.01" value="0.30" />
         </div>
 
-        <div class="ctrl">
+        <div class="ctrl" title="How parents are chosen to reproduce. Tournament: a few random dots compete, the fittest wins. Roulette: fitter dots simply get picked more often.">
           <label>Selection</label>
           <select id="selSel">
             <option value="tournament">Tournament</option>
@@ -94,22 +135,22 @@
           </select>
         </div>
 
-        <div class="ctrl" id="tournRow">
+        <div class="ctrl" id="tournRow" title="How many dots compete in each tournament. Higher = only the very best reproduce (fast but risks getting stuck); lower = weaker dots get a chance too.">
           <label>Tournament size <span class="v" id="tsVal">3</span></label>
           <input type="range" id="tournSize" min="2" max="10" step="1" value="3" />
         </div>
 
-        <div class="ctrl">
+        <div class="ctrl" title="How many top dots are copied unchanged into the next generation, so the best answer is never lost. 0 = no safety net.">
           <label>Elitism (kept unchanged) <span class="v" id="elVal">2</span></label>
           <input type="range" id="elitism" min="0" max="20" step="1" value="2" />
         </div>
 
-        <div class="ctrl row">
+        <div class="ctrl row" title="Whether offspring blend the positions of two parents (mixing good traits). Off = each child is a mutated copy of one parent.">
           <label for="crossover">Crossover (blend)</label>
           <input type="checkbox" id="crossover" checked />
         </div>
 
-        <div class="ctrl">
+        <div class="ctrl" title="How fast generations play, just for viewing. Doesn't change the outcome, only the animation speed.">
           <label>Speed <span class="v" id="gpsVal">8</span> gen/s</label>
           <input type="range" id="gps" min="1" max="60" step="1" value="8" />
         </div>
