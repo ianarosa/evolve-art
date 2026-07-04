@@ -96,10 +96,16 @@ self.onmessage = function (e) {
       rebuild();
       break;
 
-    case 'rebuild':            // shape count / style change -> fresh evolver
-      cfg = m.cfg;
-      version = m.version;
-      rebuild();
+    case 'setShapeCount':      // change budget, KEEP the evolved picture (same version)
+      evolver.setShapeCount(m.n, m.minShapes, m.maxShapes);
+      dirty = true;
+      postFrame();
+      postStats();
+      if (running) schedule();
+      break;
+
+    case 'setStyle':           // change style, KEEP existing shapes (same version)
+      evolver.setStyle(m.shapeKind, m.vertices);
       break;
 
     case 'reset':              // re-randomize on the same target

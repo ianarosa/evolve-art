@@ -8,7 +8,7 @@
 (function () {
   'use strict';
 
-  const EVAL = 128;        // fitness is measured on a 128x128 downscaled copy
+  const EVAL = 200;        // fitness is measured on a 200x200 downscaled copy (captures edges/eyes)
   const EXPORT_LONG = 1100; // high-res PNG long side
 
   // ---------------- config (single source of truth) ----------------
@@ -106,7 +106,7 @@
   let currentTargetDraw = TARGETS[0].draw;
   let targetData = null;               // { data, w, h }
   let running = true;
-  let version = 0;                     // bumped on reset / target / rebuild
+  let version = 0;                     // bumped ONLY on reset / target change (full wipes)
   let latestStats = { match: 0, attempts: 0, improvements: 0, shapes: 0 };
   let matchHistory = [];
   let lastImprovements = -1;
@@ -120,8 +120,10 @@
   function renderSize() { return evolveCanvas.width || 320; }
 
   // ==================================================================
-  //  DRIVERS  (both expose: init/setTarget/rebuild/reset/setConfig/
-  //  setPlaying/setRenderSize/paintInto/getStats/requestGenome + onframe)
+  //  DRIVERS  (both expose: init/setTarget/setShapeCount/setStyle/reset/
+  //  setConfig/setPlaying/setRenderSize/paintInto/getStats/requestGenome
+  //  + onframe). Progress-preserving ops (setShapeCount/setStyle) keep the
+  //  version; only reset/setTarget bump it so stale frames are discarded.
   // ==================================================================
 
   // ---- main-thread fallback ----
@@ -148,9 +150,16 @@
     this.target = target;
     this.evolver = new window.Art.ArtEvolver(target, this.cfg);
   };
-  MainDriver.prototype.rebuild = function (config) {
-    this.cfg = config;
-    this.evolver = new window.Art.ArtEvolver(this.target, config);
+  MainDriver.prototype.setShapeCount = function (config) {
+    this.cfg.numShapes = config.numShapes;
+    this.cfg.minShapes = config.minShapes;
+    this.cfg.maxShapes = config.maxShapes;
+    this.evolver.setShapeCount(config.numShapes, config.minShapes, config.maxShapes);
+  };
+  MainDriver.prototype.setStyle = function (config) {
+    this.cfg.shapeKind = config.shapeKind;
+    this.cfg.vertices = config.vertices;
+    this.evolver.setStyle(config.shapeKind, config.vertices);
   };
   MainDriver.prototype.reset = function () { this.evolver.reset(); };
   MainDriver.prototype.setConfig = function (config) {
@@ -202,8 +211,12 @@
   WorkerDriver.prototype.setTarget = function (target) {
     this.w.postMessage({ type: 'setTarget', target: target, version: version });
   };
-  WorkerDriver.prototype.rebuild = function (config) {
-    this.w.postMessage({ type: 'rebuild', cfg: config, version: version });
+  WorkerDriver.prototype.setShapeCount = function (config) {
+    // same version on purpose: this preserves the genome, so in-flight frames stay valid
+    this.w.postMessage({ type: 'setShapeCount', n: config.numShapes, minShapes: config.minShapes, maxShapes: config.maxShapes });
+  };
+  WorkerDriver.prototype.setStyle = function (config) {
+    this.w.postMessage({ type: 'setStyle', shapeKind: config.shapeKind, vertices: config.vertices });
   };
   WorkerDriver.prototype.reset = function () {
     this.w.postMessage({ type: 'reset', version: version });
@@ -440,19 +453,18 @@
 
   el.numShapes.addEventListener('input', () => { el.shapesVal.textContent = el.numShapes.value; });
   el.numShapes.addEventListener('change', () => {
+    // progress-preserving: grow/shrink the current genome, keep history + version
     cfg.numShapes = parseInt(el.numShapes.value, 10);
     applyShapeBounds();
-    matchHistory = []; lastImprovements = -1;
-    bumpVersion();
-    driver.rebuild(cfgCopy());
+    driver.setShapeCount(cfgCopy());
+    paintEvolve();
   });
   el.shapeStyle.addEventListener('change', () => {
+    // progress-preserving: existing shapes stay; only new shapes adopt the style
     const v = el.shapeStyle.value;
     cfg.shapeKind = v;
     cfg.vertices = v === 'poly' ? 6 : 3;
-    matchHistory = []; lastImprovements = -1;
-    bumpVersion();
-    driver.rebuild(cfgCopy());
+    driver.setStyle(cfgCopy());
   });
   el.mutAmount.addEventListener('input', () => {
     cfg.mutationAmount = parseFloat(el.mutAmount.value);
