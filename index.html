@@ -3,177 +3,157 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Genetic Algorithm Sandbox 🧬</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Ctext%20y='.9em'%20font-size='90'%3E%F0%9F%A7%AC%3C/text%3E%3C/svg%3E" />
+  <title>Evolve a Picture 🎨</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Ctext%20y='.9em'%20font-size='90'%3E%F0%9F%8E%A8%3C/text%3E%3C/svg%3E" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <!-- First-load / (?) explainer -->
   <div id="intro" hidden>
     <div class="intro-card">
-      <h2>🧬 What am I watching?</h2>
-      <p>Each <b>white dot</b> is a guess at the best location on the colored map.
-      Brighter (yellow) areas are better; dark purple areas are worse.</p>
-      <p>Every <b>generation</b>, the best guesses "reproduce" with small random
-      changes, and the worst guesses die off. Over time the whole swarm evolves
-      toward the brightest area.</p>
-      <p>That's a <b>genetic algorithm</b> — evolution used as a search. Hit
-      <b>Play</b> and watch the dots climb. The line at the top tells you, in
-      plain words, what's happening.</p>
+      <h2>🎨 What am I watching?</h2>
+      <p>The picture on the right is built from a few dozen <b>colored glass shapes</b>
+      stacked on top of each other. It starts as random junk.</p>
+      <p>The computer keeps making tiny random tweaks — nudge a corner, change a
+      color — and <b>only keeps a change if it makes the picture look MORE like the
+      target</b> on the left. Bad tweaks are thrown away.</p>
+      <p>Over thousands of these tiny improvements, random shapes slowly evolve into
+      a copy of the image. That's <b>evolution as an artist</b> — and it's why the
+      Match % only ever goes up.</p>
       <button id="introClose" class="primary">Got it — let's evolve</button>
     </div>
   </div>
 
   <div id="app">
-    <!-- ==================== STAGE (canvas) ==================== -->
+    <!-- ==================== STAGE (two canvases) ==================== -->
     <section id="stage">
-      <div id="canvas-wrap">
-        <canvas id="landscape"></canvas>
-        <div id="legend">
-          <span><i class="dot pop"></i> population</span>
-          <span><i class="dot best"></i> current best</span>
-          <span><i class="dot opt"></i> global optimum</span>
-        </div>
+      <div id="boards">
+        <figure class="board">
+          <figcaption>Target <span class="sub">the picture we're copying</span></figcaption>
+          <canvas id="target"></canvas>
+        </figure>
+        <figure class="board">
+          <figcaption>Evolving copy <span class="sub">random shapes, refining toward the target</span></figcaption>
+          <canvas id="evolve"></canvas>
+        </figure>
       </div>
-      <div id="colorbar">
-        <span>low fitness</span>
-        <div class="bar"></div>
-        <span>high fitness</span>
-      </div>
-      <p id="colorbar-note">Purple = bad spots, yellow = the best spots. The dots want to reach the yellow.</p>
+      <p id="stage-note">The right image is painted from semi-transparent shapes. Watch the noise sharpen into the target.</p>
     </section>
 
     <!-- ==================== CONTROL PANEL ==================== -->
     <aside id="panel">
       <header id="brand">
         <div class="brand-row">
-          <h1>🧬 GA Sandbox</h1>
+          <h1>🎨 Evolve a Picture</h1>
           <button id="helpBtn" title="What am I watching?">?</button>
         </div>
-        <p class="tag">Watch a population evolve up a fitness landscape.</p>
+        <p class="tag">Random shapes evolve into a copy of an image.</p>
       </header>
 
       <!-- Live plain-English status -->
       <div id="status" class="status explore">
-        <span id="statusText">🔍 Exploring — searching for high ground…</span>
+        <span id="statusText">🎨 Starting from random shapes…</span>
       </div>
 
       <!-- Transport -->
       <div class="card transport">
         <button id="playBtn" class="primary">▶ Play</button>
-        <button id="stepBtn">⏭ Step</button>
         <button id="resetBtn">↺ Reset</button>
       </div>
 
       <!-- Readouts -->
       <div class="card">
-        <div class="readout-grid">
-          <div class="ro">
-            <span class="ro-label">Generation</span>
-            <span class="ro-val" id="roGen">0</span>
-            <span class="ro-cap">rounds of evolution so far</span>
-          </div>
-          <div class="ro">
-            <span class="ro-label">Best fitness</span>
-            <span class="ro-val" id="roBest">–</span>
-            <span class="ro-cap">score of the single best individual (higher = better)</span>
-          </div>
-          <div class="ro">
-            <span class="ro-label">Mean fitness</span>
-            <span class="ro-val" id="roMean">–</span>
-            <span class="ro-cap">average score across the whole population</span>
-          </div>
-          <div class="ro">
-            <span class="ro-label">Gap to true best</span>
-            <span class="ro-val" id="roDist">–</span>
-            <span class="ro-cap">how far the best individual still is from the perfect answer (0 = perfect)</span>
-          </div>
-        </div>
-        <canvas id="chart"></canvas>
-        <div class="chart-key">
-          <span><i class="line best"></i> best</span>
-          <span><i class="line mean"></i> mean</span>
+        <div class="match-hero">
+          <span class="match-label">Match</span>
+          <span class="match-val" id="roMatch">0.0%</span>
+          <span class="ro-cap">how closely the evolving copy resembles the target (climbs toward 100%)</span>
         </div>
 
-        <div class="diversity">
-          <div class="div-head">
-            <span>Diversity (population spread)</span>
-            <span id="roDiv">–</span>
+        <canvas id="chart"></canvas>
+        <div class="chart-key">
+          <span><i class="line best"></i> Match % over time</span>
+        </div>
+
+        <div class="readout-grid">
+          <div class="ro">
+            <span class="ro-label">Attempts</span>
+            <span class="ro-val" id="roAttempts">0</span>
+            <span class="ro-cap">random tweaks tried so far</span>
           </div>
-          <div class="div-track"><div id="divBar" class="div-fill"></div></div>
-          <p class="hint" id="divHint">How spread out the population is — low means everyone's clustered on one spot.</p>
+          <div class="ro">
+            <span class="ro-label">Improvements</span>
+            <span class="ro-val" id="roImprove">0</span>
+            <span class="ro-cap">tweaks that were kept because they helped</span>
+          </div>
+          <div class="ro">
+            <span class="ro-label">Shapes</span>
+            <span class="ro-val" id="roShapes">0</span>
+            <span class="ro-cap">glass shapes currently in the picture</span>
+          </div>
+          <div class="ro">
+            <span class="ro-label">Speed</span>
+            <span class="ro-val" id="roRate">0/s</span>
+            <span class="ro-cap">tweaks tried per second right now</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Target picker -->
+      <div class="card">
+        <div class="ctrl" title="The picture to recreate. Pick a built-in one, or upload your own — everything runs on your machine, nothing is sent to any server.">
+          <label>Target picture</label>
+          <div class="target-grid" id="targetGrid"></div>
+        </div>
+        <div class="ctrl" title="Use any image from your device as the target. It stays local — nothing is uploaded anywhere.">
+          <button id="uploadBtn" class="wide-btn">⬆ Upload your own image</button>
+          <input type="file" id="fileInput" accept="image/*" hidden />
         </div>
       </div>
 
       <!-- Controls -->
       <div class="card">
-        <div class="ctrl" title="The problem to solve: the shape of the map the dots are climbing. Single peak is easy; Rastrigin is full of traps.">
-          <label>Landscape</label>
-          <select id="landscapeSel"></select>
+        <div class="ctrl" title="How many glass shapes the picture is allowed to use. More = finer detail, but each attempt is slower.">
+          <label>Number of shapes <span class="v" id="shapesVal">60</span></label>
+          <input type="range" id="numShapes" min="20" max="200" step="5" value="60" />
         </div>
 
-        <div class="ctrl" title="How many dots (candidate answers) are in the swarm. More = searches more of the map at once, but runs slower.">
-          <label>Population size <span class="v" id="popVal">150</span></label>
-          <input type="range" id="popSize" min="10" max="500" step="10" value="150" />
-        </div>
-
-        <div class="ctrl" title="How often offspring get a random tweak. Higher = more exploration, less likely to get stuck; too high = never settles down.">
-          <label>Mutation rate <span class="v" id="mrVal">0.15</span></label>
-          <input type="range" id="mutRate" min="0" max="1" step="0.01" value="0.15" />
-        </div>
-
-        <div class="ctrl" title="How big each random tweak is. Higher = bigger jumps that can escape traps but overshoot; lower = fine-tuning that can get stuck.">
-          <label>Mutation strength (σ) <span class="v" id="msVal">0.30</span></label>
-          <input type="range" id="mutSigma" min="0.01" max="1.5" step="0.01" value="0.30" />
-        </div>
-
-        <div class="ctrl" title="How parents are chosen to reproduce. Tournament: a few random dots compete, the fittest wins. Roulette: fitter dots simply get picked more often.">
-          <label>Selection</label>
-          <select id="selSel">
-            <option value="tournament">Tournament</option>
-            <option value="roulette">Roulette (fitness-proportionate)</option>
+        <div class="ctrl" title="Shape corners. Triangles are simple and fast; polygons have more corners for finer curves but evolve slower.">
+          <label>Shape style</label>
+          <select id="shapeStyle">
+            <option value="3">Triangles (3 corners)</option>
+            <option value="4">Quads (4 corners)</option>
+            <option value="6">Polygons (6 corners)</option>
           </select>
         </div>
 
-        <div class="ctrl" id="tournRow" title="How many dots compete in each tournament. Higher = only the very best reproduce (fast but risks getting stuck); lower = weaker dots get a chance too.">
-          <label>Tournament size <span class="v" id="tsVal">3</span></label>
-          <input type="range" id="tournSize" min="2" max="10" step="1" value="3" />
+        <div class="ctrl" title="How big each random tweak is. Higher = bolder jumps that explore fast but overshoot; lower = fine detailing that refines slowly.">
+          <label>Mutation amount <span class="v" id="mutVal">0.08</span></label>
+          <input type="range" id="mutAmount" min="0.01" max="0.30" step="0.01" value="0.08" />
         </div>
 
-        <div class="ctrl" title="How many top dots are copied unchanged into the next generation, so the best answer is never lost. 0 = no safety net.">
-          <label>Elitism (kept unchanged) <span class="v" id="elVal">2</span></label>
-          <input type="range" id="elitism" min="0" max="20" step="1" value="2" />
-        </div>
-
-        <div class="ctrl row" title="Whether offspring blend the positions of two parents (mixing good traits). Off = each child is a mutated copy of one parent.">
-          <label for="crossover">Crossover (blend)</label>
-          <input type="checkbox" id="crossover" checked />
-        </div>
-
-        <div class="ctrl" title="How fast generations play, just for viewing. Doesn't change the outcome, only the animation speed.">
-          <label>Speed <span class="v" id="gpsVal">8</span> gen/s</label>
-          <input type="range" id="gps" min="1" max="60" step="1" value="8" />
+        <div class="ctrl" title="How many tweaks to try per animation frame. Higher = evolves faster but uses more CPU. Doesn't change the result, only the pace.">
+          <label>Speed <span class="v" id="speedVal">60</span> tries/frame</label>
+          <input type="range" id="speed" min="10" max="300" step="10" value="60" />
         </div>
       </div>
 
       <!-- How it works -->
       <details class="card how">
         <summary>How it works</summary>
-        <p>Each dot is an <b>individual</b> whose genome is a point (x, y). The colored map is a
-        <b>fitness landscape</b> — brighter is better. Every generation the algorithm:
-        <b>evaluates</b> fitness, <b>selects</b> fitter parents, <b>crosses over</b> and
-        <b>mutates</b> them into a new population.</p>
-        <p>Try the <b>Rastrigin</b> landscape with a low mutation rate and watch the swarm get
-        stuck on a local peak — the <b>diversity meter</b> collapsing is premature convergence.
-        Raise mutation strength to escape.</p>
+        <p>The picture's "genome" is a list of colored, semi-transparent polygons.
+        Each <b>attempt</b> copies the current best, makes one small random change,
+        and redraws it. If the new version matches the target <b>better</b>, it becomes
+        the new best; otherwise it's discarded.</p>
+        <p>Because only improvements are kept, the <b>Match %</b> can never go down.
+        Fitness is measured on a small downscaled copy for speed, then the winner is
+        painted large on the right.</p>
       </details>
 
-      <footer class="foot">Vanilla JS · no build step · fully offline</footer>
+      <footer class="foot">Vanilla JS · no build step · runs fully offline</footer>
     </aside>
   </div>
 
-  <script src="landscape.js"></script>
-  <script src="ga.js"></script>
+  <script src="art.js"></script>
   <script src="main.js"></script>
 </body>
 </html>

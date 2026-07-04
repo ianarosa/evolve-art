@@ -1,26 +1,36 @@
-# 🧬 Genetic Algorithm Sandbox
+# 🎨 Evolve a Picture
 
-A mesmerizing, single-page toy where you watch a population of individuals
-**evolve up a 2D fitness landscape**. Each dot is a genome `(x, y)`; the colored
-map is the fitness field (brighter = fitter). Every generation the GA
-**evaluates → selects → crosses over → mutates** the population, and you watch
-the cloud migrate toward the peaks.
+A mesmerizing, single-page toy that recreates an image **out of colored glass
+shapes using evolution**. Two pictures sit side by side: the **target** (left)
+and an **evolving copy** (right) that starts as random noise and slowly sharpens
+into a near-perfect match — the classic "evolve the Mona Lisa" effect.
 
-It's built to make evolutionary dynamics *visible* — especially **premature
-convergence**: pick the hard Rastrigin landscape, drop the mutation rate, and
-watch the diversity meter collapse as the swarm gets trapped on a local peak.
+## How it works
+
+The evolving picture's "genome" is a stack of semi-transparent colored polygons.
+The engine runs a **(1+1) evolution strategy / hill-climber**:
+
+1. Copy the current best genome.
+2. Apply one small random **mutation** — nudge a vertex, tweak a color or alpha,
+   or occasionally add / remove / reorder a shape.
+3. Render it and measure **fitness** = pixel similarity to the target (sum of
+   squared per-channel differences, evaluated on a fast 128px downscale).
+4. **Keep the mutant only if it matches better; otherwise discard it.**
+
+Because only improvements survive, the **Match %** climbs monotonically toward
+100 and never drops. Thousands of these tiny accepted tweaks per second turn
+random shapes into a copy of the image.
 
 ## Features
 
-- **3 switchable landscapes** — single Gaussian peak (easy), multi-peak (traps),
-  and Rastrigin (many local optima, one global).
-- **Live GA controls** — population size, mutation rate & strength (σ),
-  selection method (tournament / roulette), tournament size, elitism count,
-  blend crossover toggle, and speed (generations/second).
-- **Live readouts** — generation, best & mean fitness with a sparkline chart,
-  a **diversity meter** (population spread), and distance from the best
-  individual to the true global optimum.
-- **Markers** — the current best (cyan) and the global optimum (rose crosshair).
+- **Target picker** — 4 built-in procedural targets (smiley, heart, sunset, a
+  colored composition) drawn in-canvas, plus **upload your own image** (stays
+  100% local — nothing is sent anywhere).
+- **Live controls** — number of shapes, shape style (triangles / quads /
+  polygons), mutation amount, speed (attempts per frame), Play/Pause, Reset.
+- **Live readouts** — headline **Match %**, attempts tried, improvements
+  accepted, current shape count, tweaks-per-second, a Match% sparkline, and a
+  plain-English status line that narrates the run.
 - Pure **vanilla JS + Canvas**, dark theme, emoji favicon, **no build step, no
   frameworks, no CDNs** — fully self-contained and offline-capable.
 
@@ -52,13 +62,12 @@ Pages, Cloudflare Pages) — just serve the `sim/` folder.
 
 ```
 sim/
-  index.html    # markup + panel
-  style.css     # dark GitHub-ish theme, responsive layout
-  landscape.js  # the fitness landscapes + color/optimum precompute
-  ga.js         # the genetic algorithm engine (selection/crossover/mutation)
-  main.js       # DOM wiring, canvas rendering, animation loop
+  index.html    # markup + control panel + intro overlay
+  style.css     # dark theme, responsive two-canvas layout
+  art.js        # genome, render, mutate, fitness, the (1+1) ArtEvolver engine
+  main.js       # DOM wiring, built-in targets, upload, animation loop
 ```
 
-The code is split so features can be added without stepping on each other:
-`landscape.js` owns the fitness functions, `ga.js` owns the evolution, and
-`main.js` owns the UI/rendering.
+`art.js` owns the evolution/rendering engine (exposes `window.Art`), and
+`main.js` owns the UI, the procedural targets, and the animation loop — so
+features can be added without the two stepping on each other.
