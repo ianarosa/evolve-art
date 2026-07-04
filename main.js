@@ -20,10 +20,11 @@
     speed: 60,             // mutation attempts per frame/tick
     seed: true,            // seed the first genome from target colours
     minShapes: 36,
-    maxShapes: 126
+    maxShapes: 198         // grow-on-stall cap (~200 for crisp features)
   };
   function applyShapeBounds() {
-    cfg.maxShapes = Math.min(240, Math.round(cfg.numShapes * 1.4));
+    // Cap ~200 so grow-on-stall has room to add crisp detail (Pass 3).
+    cfg.maxShapes = Math.min(240, Math.round(cfg.numShapes * 2.2));
     cfg.minShapes = Math.max(3, Math.round(cfg.numShapes * 0.4));
   }
   function cfgCopy() { return JSON.parse(JSON.stringify(cfg)); }

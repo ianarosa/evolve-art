@@ -35,6 +35,8 @@
   const GROW_BATCH = 8;        // shapes appended per grow-on-stall event
   const SCALE_FACTORS = [0.32, 0.64, 1.0]; // coarse -> fine (of the target long side)
   const BOX_FULL_FRAC = 0.5;   // a dirty box >= this fraction of the image => just do full
+  const EDGE_K = 3;            // edge weight: w = 1 + EDGE_K * normalizedEdgeStrength
+  const REHEAT_BEFORE_GROW = 1;// stall re-heats to try before adding shape capacity
 
   const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
   const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -280,9 +282,39 @@
         const w = Math.max(8, Math.round(full.w * f));
         const h = Math.max(8, Math.round(full.h * f));
         const data = (f >= 1.0) ? full.data : this._downsample(full, w, h);
-        const bl = this._baselineFor(data);
-        this._scales.push({ w, h, data, baseline: bl.baseline, avg: bl.avg });
+        const wmap = this._edgeWeights(data, w, h); // edge/gradient weight per pixel
+        const bl = this._baselineFor(data, wmap);   // baseline weighted the SAME way
+        this._scales.push({ w, h, data, wmap, baseline: bl.baseline, avg: bl.avg });
       }
+    }
+
+    // Per-pixel error weight w = 1 + EDGE_K * (normalized Sobel edge strength of
+    // the target). Edges (a few % of pixels) get up to ~(1+EDGE_K)x weight so the
+    // metric stops washing them out; flats keep weight ~1. Precomputed per scale.
+    _edgeWeights(data, w, h) {
+      const wt = new Float32Array(w * h);
+      if (this.cfg.edgeWeight === false) { wt.fill(1); return wt; }
+      const lum = new Float32Array(w * h);
+      for (let p = 0, i = 0; i < data.length; i += 4, p++) {
+        lum[p] = LUMA_R * data[i] + LUMA_G * data[i + 1] + LUMA_B * data[i + 2];
+      }
+      let mx = 1e-6;
+      const mag = new Float32Array(w * h);
+      for (let y = 0; y < h; y++) {
+        const ym = y > 0 ? y - 1 : y, yp = y < h - 1 ? y + 1 : y;
+        for (let x = 0; x < w; x++) {
+          const xm = x > 0 ? x - 1 : x, xp = x < w - 1 ? x + 1 : x;
+          const a00 = lum[ym * w + xm], a01 = lum[ym * w + x], a02 = lum[ym * w + xp];
+          const a10 = lum[y * w + xm], a12 = lum[y * w + xp];
+          const a20 = lum[yp * w + xm], a21 = lum[yp * w + x], a22 = lum[yp * w + xp];
+          const gx = (a02 + 2 * a12 + a22) - (a00 + 2 * a10 + a20);
+          const gy = (a20 + 2 * a21 + a22) - (a00 + 2 * a01 + a02);
+          const m = Math.sqrt(gx * gx + gy * gy);
+          mag[y * w + x] = m; if (m > mx) mx = m;
+        }
+      }
+      for (let p = 0; p < w * h; p++) wt[p] = 1 + EDGE_K * (mag[p] / mx);
+      return wt;
     }
     _downsample(full, w, h) {
       const src = makeCanvas(full.w, full.h);
@@ -297,15 +329,15 @@
       dctx.drawImage(src, 0, 0, full.w, full.h, 0, 0, w, h);
       return dctx.getImageData(0, 0, w, h).data;
     }
-    _baselineFor(data) {
+    _baselineFor(data, wmap) {
       const N = data.length / 4;
       let sr = 0, sg = 0, sb = 0;
       for (let i = 0; i < data.length; i += 4) { sr += data[i]; sg += data[i + 1]; sb += data[i + 2]; }
       const ar = sr / N, ag = sg / N, ab = sb / N;
       let base = 0;
-      for (let i = 0; i < data.length; i += 4) {
+      for (let p = 0, i = 0; i < data.length; i += 4, p++) {
         const dr = ar - data[i], dg = ag - data[i + 1], db = ab - data[i + 2];
-        base += LUMA_R * dr * dr + LUMA_G * dg * dg + LUMA_B * db * db;
+        base += wmap[p] * (LUMA_R * dr * dr + LUMA_G * dg * dg + LUMA_B * db * db);
       }
       return { baseline: Math.max(base, 1e-6), avg: { r: ar, g: ag, b: ab } };
     }
@@ -314,6 +346,7 @@
       this.target = { data: sc.data, w: sc.w, h: sc.h };
       this.w = sc.w; this.h = sc.h;
       this.baselineError = sc.baseline;
+      this._wArr = sc.wmap;
       this._avg = sc.avg;
     }
 
@@ -343,6 +376,8 @@
       this._winAtt = 0; this._winAcc = 0;
       this._lastImpAtt = 0;
       this._scaleStartAtt = 0;
+      this._reheatCount = 0;   // re-heats since last improvement
+      this._reheats = 0;       // total re-heats (telemetry)
       this._maxMatch = this.matchPct(this.bestError);
       this.history = [this._maxMatch];
       this._computeErrorMap();
@@ -374,11 +409,11 @@
       const w = this.w, h = this.h, ctx = this.ectx;
       renderGenome(ctx, w, h, this.best);
       const cur = ctx.getImageData(0, 0, w, h).data;
-      const tgt = this.target.data, arr = this._bestErrArr;
+      const tgt = this.target.data, arr = this._bestErrArr, wArr = this._wArr;
       let total = 0;
       for (let p = 0, i = 0; i < cur.length; i += 4, p++) {
         const dr = cur[i] - tgt[i], dg = cur[i + 1] - tgt[i + 1], db = cur[i + 2] - tgt[i + 2];
-        const e = LUMA_R * dr * dr + LUMA_G * dg * dg + LUMA_B * db * db;
+        const e = wArr[p] * (LUMA_R * dr * dr + LUMA_G * dg * dg + LUMA_B * db * db);
         arr[p] = e; total += e;
       }
       this.bestError = total;
@@ -388,11 +423,11 @@
     _errorOf(shapes) {
       const w = this.w, h = this.h, ctx = this.ectx;
       renderGenome(ctx, w, h, { shapes });
-      const cur = ctx.getImageData(0, 0, w, h).data, tgt = this.target.data;
+      const cur = ctx.getImageData(0, 0, w, h).data, tgt = this.target.data, wArr = this._wArr;
       let t = 0;
-      for (let i = 0; i < cur.length; i += 4) {
+      for (let p = 0, i = 0; i < cur.length; i += 4, p++) {
         const dr = cur[i] - tgt[i], dg = cur[i + 1] - tgt[i + 1], db = cur[i + 2] - tgt[i + 2];
-        t += LUMA_R * dr * dr + LUMA_G * dg * dg + LUMA_B * db * db;
+        t += wArr[p] * (LUMA_R * dr * dr + LUMA_G * dg * dg + LUMA_B * db * db);
       }
       return t;
     }
@@ -430,16 +465,16 @@
       if (bw * bh >= BOX_FULL_FRAC * w * h) return null; // not worth localizing
       this._renderBox(shapes, bx0, by0, bw, bh);
       const cur = this.ectx.getImageData(bx0, by0, bw, bh).data;
-      const tgt = this.target.data, arr = this._bestErrArr, buf = this._boxBuf;
+      const tgt = this.target.data, arr = this._bestErrArr, buf = this._boxBuf, wArr = this._wArr;
       let oldB = 0, newB = 0, bi = 0;
       for (let yy = 0; yy < bh; yy++) {
         const trow = (by0 + yy) * w;
         for (let xx = 0; xx < bw; xx++) {
-          const tx = bx0 + xx;
-          const ti = (trow + tx) * 4, ci = bi * 4;
+          const tx = bx0 + xx, idx = trow + tx;
+          const ti = idx * 4, ci = bi * 4;
           const dr = cur[ci] - tgt[ti], dg = cur[ci + 1] - tgt[ti + 1], db = cur[ci + 2] - tgt[ti + 2];
-          const e = LUMA_R * dr * dr + LUMA_G * dg * dg + LUMA_B * db * db;
-          buf[bi] = e; newB += e; oldB += arr[trow + tx]; bi++;
+          const e = wArr[idx] * (LUMA_R * dr * dr + LUMA_G * dg * dg + LUMA_B * db * db);
+          buf[bi] = e; newB += e; oldB += arr[idx]; bi++;
         }
       }
       return { total: this.bestError - oldB + newB, kind: 'box', bx0, by0, bw, bh };
@@ -448,11 +483,11 @@
     _evalFull(shapes) {
       const w = this.w, h = this.h, ctx = this.ectx;
       renderGenome(ctx, w, h, { shapes });
-      const cur = ctx.getImageData(0, 0, w, h).data, tgt = this.target.data, buf = this._fullBuf;
+      const cur = ctx.getImageData(0, 0, w, h).data, tgt = this.target.data, buf = this._fullBuf, wArr = this._wArr;
       let total = 0;
       for (let p = 0, i = 0; i < cur.length; i += 4, p++) {
         const dr = cur[i] - tgt[i], dg = cur[i + 1] - tgt[i + 1], db = cur[i + 2] - tgt[i + 2];
-        const e = LUMA_R * dr * dr + LUMA_G * dg * dg + LUMA_B * db * db;
+        const e = wArr[p] * (LUMA_R * dr * dr + LUMA_G * dg * dg + LUMA_B * db * db);
         buf[p] = e; total += e;
       }
       return { total, kind: 'full' };
@@ -534,6 +569,15 @@
       // _maxMatch is preserved; bestMatch holds it until fine-scale catches up.
     }
 
+    // Re-heat the effective mutation size back to the ceiling and restart the
+    // annealing window, so a stalled run can make the big moves needed to fix
+    // hard edges. Proposal-only -> monotonicity is unaffected.
+    _reheat() {
+      this._effAmt = this.cfg.mutationAmount;
+      this._winAtt = 0; this._winAcc = 0;
+      this._reheats++;
+    }
+
     _growBatch() {
       const room = this.cfg.maxShapes - this.best.shapes.length;
       const k = Math.min(GROW_BATCH, room);
@@ -565,6 +609,7 @@
           this.improvements++;
           this._winAcc++;
           this._lastImpAtt = this.attempts;
+          this._reheatCount = 0; // escaped the stall
           improved = true;
         }
         // 1/5-success-rule annealing (slider is the ceiling)
@@ -576,14 +621,27 @@
           else this._effAmt = Math.max(floor, this._effAmt * 0.85);
           this._winAtt = 0; this._winAcc = 0;
         }
-        // On stall (or a scale running too long): step up resolution, else grow.
+        // On stall (or a scale running too long): step up resolution first; then
+        // at the finest scale, RE-HEAT the mutation size to escape a local optimum
+        // (its big moves fix hard edges); if a re-heat cycle still stalls, add
+        // shape capacity. All of these are proposal-only -> Match% stays monotonic.
         const stalled = this.attempts - this._lastImpAtt >= STALL_ATTEMPTS;
         const aged = this.attempts - this._scaleStartAtt >= SCALE_MAX_ATT;
         if (this._scaleIdx < this._scales.length - 1 && (stalled || aged)) {
           this._stepUpScale();
+          this._reheatCount = 0;
           this._lastImpAtt = this.attempts;
-        } else if (stalled && this.best.shapes.length < this.cfg.maxShapes) {
-          this._growBatch();
+        } else if (stalled) {
+          const canGrow = this.best.shapes.length < this.cfg.maxShapes;
+          if (this.cfg.reheat !== false && this._reheatCount < REHEAT_BEFORE_GROW) {
+            this._reheat();
+            this._reheatCount++;
+          } else if (canGrow) {
+            this._growBatch();
+            this._reheatCount = 0;
+          } else if (this.cfg.reheat !== false) {
+            this._reheat(); // maxed out on shapes: keep re-heating, never give up
+          }
           this._lastImpAtt = this.attempts;
         }
       }
