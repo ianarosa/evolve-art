@@ -30,10 +30,20 @@
   }
 
   function randomShape(cfg) {
-    let kind;
-    if (cfg.shapeKind === 'ellipse') kind = 'ellipse';
-    else if (cfg.shapeKind === 'mixed') kind = Math.random() < 0.5 ? 'ellipse' : 'poly';
-    else kind = 'poly';
+    // Decide this shape's kind (and, for polygons, its vertex count).
+    let kind, nVerts;
+    if (cfg.shapeKind === 'ellipse') {
+      kind = 'ellipse';
+    } else if (cfg.shapeKind === 'mixed') {
+      // Truly mixed: each shape is independently one of ~three balanced kinds
+      // — ellipse, triangle, or a higher-vertex polygon — so all three show up.
+      const r = Math.random();
+      if (r < 0.34) { kind = 'ellipse'; }
+      else if (r < 0.67) { kind = 'poly'; nVerts = 3; }                 // triangle
+      else { kind = 'poly'; nVerts = 5 + ((Math.random() * 4) | 0); }   // 5..8 polygon
+    } else {
+      kind = 'poly';
+    }
 
     if (kind === 'ellipse') {
       return {
@@ -44,9 +54,7 @@
         r: randByte(), g: randByte(), b: randByte(), a: 0.1 + Math.random() * 0.4
       };
     }
-    let nVerts;
-    if (cfg.shapeKind === 'mixed') nVerts = 3 + ((Math.random() * 4) | 0); // 3..6
-    else nVerts = cfg.vertices || 3;
+    if (nVerts === undefined) nVerts = cfg.vertices || 3;
     const cx = Math.random(), cy = Math.random(), spread = 0.28, pts = [];
     for (let i = 0; i < nVerts; i++) {
       pts.push({ x: clamp01(cx + rnd() * spread), y: clamp01(cy + rnd() * spread) });

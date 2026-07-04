@@ -14,7 +14,7 @@
   // ---------------- config (single source of truth) ----------------
   const cfg = {
     numShapes: 60,
-    shapeKind: 'ellipse',  // 'tri' | 'poly' | 'ellipse' | 'mixed'
+    shapeKind: 'mixed',    // 'tri' | 'poly' | 'ellipse' | 'mixed'
     vertices: 3,           // used by 'tri'(3) / 'poly'(6)
     mutationAmount: 0.08,
     speed: 60,             // mutation attempts per frame/tick
