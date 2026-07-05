@@ -495,13 +495,19 @@
 
   // ---------------- intro overlay ----------------
   function showIntro(on) { el.intro.hidden = !on; }
+  function dismissIntro() {
+    showIntro(false);
+    try { localStorage.setItem('art_seen_intro', '1'); } catch (e) { /* private mode */ }
+  }
   let seenIntro = false;
   try { seenIntro = localStorage.getItem('art_seen_intro') === '1'; } catch (e) { /* private mode */ }
   showIntro(!seenIntro);
-  el.introClose.addEventListener('click', () => {
-    showIntro(false);
-    try { localStorage.setItem('art_seen_intro', '1'); } catch (e) { /* ignore */ }
-  });
+  el.introClose.addEventListener('click', dismissIntro);
+  // Dismiss on any backdrop interaction so a click meant for a control below is
+  // never silently swallowed by the overlay. Clicks INSIDE the card do nothing
+  // (e.target is a child, not the backdrop element itself).
+  el.intro.addEventListener('click', (e) => { if (e.target === el.intro) dismissIntro(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !el.intro.hidden) dismissIntro(); });
   el.helpBtn.addEventListener('click', () => showIntro(true));
 
   // ---------------- boot ----------------
