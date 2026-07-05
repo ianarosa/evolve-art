@@ -18,7 +18,7 @@
     vertices: 3,           // used by 'tri'(3) / 'poly'(6)
     mutationAmount: 0.18,  // CEILING for the auto-annealer (starts here, shrinks as it converges)
     speed: 60,             // mutation attempts per frame/tick
-    seed: true,            // seed the first genome from target colours
+    seed: false,           // start from true noise; the "Smart start" toggle enables the seeded head-start
     minShapes: 36,
     maxShapes: 198         // grow-on-stall cap (~200 for crisp features)
   };
@@ -101,6 +101,7 @@
     shapeStyle: $('shapeStyle'),
     mutAmount: $('mutAmount'), mutVal: $('mutVal'),
     speed: $('speed'), speedVal: $('speedVal'),
+    seedToggle: $('seedToggle'),
     intro: $('intro'), introClose: $('introClose'), helpBtn: $('helpBtn')
   };
 
@@ -167,6 +168,8 @@
   MainDriver.prototype.setConfig = function (config) {
     this.cfg.mutationAmount = config.mutationAmount;
     this.cfg.speed = config.speed;
+    this.cfg.seed = config.seed;                 // so a subsequent reset() honours the Smart-start toggle
+    if (this.evolver) this.evolver.cfg.seed = config.seed;
   };
   MainDriver.prototype.setPlaying = function (on) { this.running = on; };
   MainDriver.prototype.setRenderSize = function () { /* draws vector at display size */ };
@@ -224,7 +227,7 @@
     this.w.postMessage({ type: 'reset', version: version });
   };
   WorkerDriver.prototype.setConfig = function (config) {
-    this.w.postMessage({ type: 'config', cfg: { mutationAmount: config.mutationAmount, speed: config.speed } });
+    this.w.postMessage({ type: 'config', cfg: { mutationAmount: config.mutationAmount, speed: config.speed, seed: config.seed } });
   };
   WorkerDriver.prototype.setPlaying = function (on) { this.w.postMessage({ type: 'play', running: on }); };
   WorkerDriver.prototype.setRenderSize = function (size) { this.w.postMessage({ type: 'renderSize', size: size }); };
@@ -478,6 +481,15 @@
     el.speedVal.textContent = cfg.speed;
     driver.setConfig(cfgCopy());
   });
+  el.seedToggle.addEventListener('change', () => {
+    // Switching the start mode changes how the first genome is built, so the run
+    // must restart — same side-effects as the Reset button.
+    cfg.seed = el.seedToggle.checked;
+    driver.setConfig(cfgCopy());   // push new seed flag to worker/evolver
+    matchHistory = []; lastImprovements = -1;
+    bumpVersion();
+    driver.reset();
+  });
 
   // ---------------- intro overlay ----------------
   function showIntro(on) { el.intro.hidden = !on; }
@@ -496,6 +508,7 @@
   selectTargetButton(TARGETS[0].key);
   buildTargetData();
   renderTarget();
+  el.seedToggle.checked = cfg.seed;   // reflect the default start mode (noise = unchecked)
   driver.init(targetForDriver(), cfgCopy(), renderSize(), running);
   setRunning(true);
 })();

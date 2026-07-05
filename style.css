@@ -234,6 +234,13 @@ html, body {
 .ctrl.row { display: flex; align-items: center; justify-content: space-between; }
 .ctrl.row label { margin: 0; }
 
+input[type="checkbox"].toggle {
+  width: 18px; height: 18px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex: none;
+}
+
 select {
   width: 100%;
   padding: 8px 10px;

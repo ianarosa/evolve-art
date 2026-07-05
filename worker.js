@@ -120,6 +120,7 @@ self.onmessage = function (e) {
     case 'config':             // live tweaks that need no rebuild
       cfg.mutationAmount = m.cfg.mutationAmount;
       cfg.speed = m.cfg.speed;
+      cfg.seed = m.cfg.seed;   // next 'reset' rebuilds honouring the new start mode
       break;
 
     case 'renderSize':
