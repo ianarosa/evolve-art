@@ -214,7 +214,8 @@
     this.w.postMessage({ type: 'init', target: target, cfg: config, renderSize: rs, version: version, running: run });
   };
   WorkerDriver.prototype.setTarget = function (target) {
-    this.w.postMessage({ type: 'setTarget', target: target, version: version });
+    // carry the authoritative play state so the worker can't keep stepping a paused run
+    this.w.postMessage({ type: 'setTarget', target: target, version: version, running: running });
   };
   WorkerDriver.prototype.setShapeCount = function (config) {
     // same version on purpose: this preserves the genome, so in-flight frames stay valid
@@ -224,7 +225,8 @@
     this.w.postMessage({ type: 'setStyle', shapeKind: config.shapeKind, vertices: config.vertices });
   };
   WorkerDriver.prototype.reset = function () {
-    this.w.postMessage({ type: 'reset', version: version });
+    // carry the authoritative play state: a Reset while paused must STAY paused
+    this.w.postMessage({ type: 'reset', version: version, running: running });
   };
   WorkerDriver.prototype.setConfig = function (config) {
     this.w.postMessage({ type: 'config', cfg: { mutationAmount: config.mutationAmount, speed: config.speed, seed: config.seed } });

@@ -93,6 +93,7 @@ self.onmessage = function (e) {
     case 'setTarget':          // new picture -> fresh evolver, new version
       target = m.target;
       version = m.version;
+      if (typeof m.running === 'boolean') running = m.running;  // adopt main's authoritative play state
       rebuild();
       break;
 
@@ -110,11 +111,12 @@ self.onmessage = function (e) {
 
     case 'reset':              // re-randomize on the same target
       version = m.version;
+      if (typeof m.running === 'boolean') running = m.running;  // adopt main's authoritative play state
       evolver.reset();
       dirty = true;
       postFrame();
       postStats();
-      if (running) schedule();
+      if (running) schedule();  // paused -> stays paused (attempts stay at 0); running -> resumes
       break;
 
     case 'config':             // live tweaks that need no rebuild
