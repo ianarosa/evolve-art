@@ -93,7 +93,8 @@
 
   const el = {
     play: $('playBtn'), reset: $('resetBtn'), save: $('saveBtn'),
-    roMatch: $('roMatch'), roAttempts: $('roAttempts'), roImprove: $('roImprove'),
+    roMatch: $('roMatch'), matchBar: $('matchBar'),
+    roAttempts: $('roAttempts'), roImprove: $('roImprove'),
     roShapes: $('roShapes'), roRate: $('roRate'),
     status: $('status'), statusText: $('statusText'),
     targetGrid: $('targetGrid'), uploadBtn: $('uploadBtn'), fileInput: $('fileInput'),
@@ -312,11 +313,26 @@
     const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
     const pL = 4, pR = 4, pT = 6, pB = 6;
     const plotW = w - pL - pR, plotH = h - pT - pB;
+    const xAt = (i) => pL + (i / (n - 1)) * plotW;
+    const yAt = (i) => pT + (1 - (matchHistory[i] - lo) / (hi - lo)) * plotH;
+    const baseY = h - pB;
+
+    // Subtle gradient area fill beneath the line (drawn first, so the stroke sits on top)
+    cctx.beginPath();
+    cctx.moveTo(xAt(0), baseY);
+    for (let i = 0; i < n; i++) cctx.lineTo(xAt(i), yAt(i));
+    cctx.lineTo(xAt(n - 1), baseY);
+    cctx.closePath();
+    const areaGrad = cctx.createLinearGradient(0, pT, 0, baseY);
+    areaGrad.addColorStop(0, 'rgba(34, 211, 238, 0.22)');
+    areaGrad.addColorStop(1, 'rgba(34, 211, 238, 0)');
+    cctx.fillStyle = areaGrad;
+    cctx.fill();
+
+    // Line on top
     cctx.beginPath();
     for (let i = 0; i < n; i++) {
-      const px = pL + (i / (n - 1)) * plotW;
-      const py = pT + (1 - (matchHistory[i] - lo) / (hi - lo)) * plotH;
-      if (i === 0) cctx.moveTo(px, py); else cctx.lineTo(px, py);
+      if (i === 0) cctx.moveTo(xAt(i), yAt(i)); else cctx.lineTo(xAt(i), yAt(i));
     }
     cctx.strokeStyle = '#22d3ee';
     cctx.lineWidth = 1.8 * dpr;
@@ -326,6 +342,7 @@
 
   function renderReadouts(s) {
     el.roMatch.textContent = s.match.toFixed(1) + '%';
+    el.matchBar.style.width = Math.max(0, Math.min(100, s.match)) + '%';  // visual-only progress fill
     el.roAttempts.textContent = s.attempts.toLocaleString();
     el.roImprove.textContent = s.improvements.toLocaleString();
     el.roShapes.textContent = s.shapes;

@@ -56,17 +56,20 @@
       </div>
 
       <!-- Transport -->
+      <p class="section-label">Playback</p>
       <div class="card transport">
         <button id="playBtn" class="primary" title="Start or pause the evolution.">▶ Play</button>
-        <button id="resetBtn" title="Throw away the current picture and start over from fresh random shapes.">↺ Reset</button>
-        <button id="saveBtn" title="Download the current evolving picture as a high-resolution PNG.">💾 Save</button>
+        <button id="resetBtn" class="ghost" title="Throw away the current picture and start over from fresh random shapes.">↺ Reset</button>
+        <button id="saveBtn" class="ghost" title="Download the current evolving picture as a high-resolution PNG.">💾 Save</button>
       </div>
 
       <!-- Readouts -->
+      <p class="section-label">Progress</p>
       <div class="card">
         <div class="match-hero">
           <span class="match-label">Match</span>
           <span class="match-val" id="roMatch">0.0%</span>
+          <div class="match-bar"><div class="match-bar-fill" id="matchBar"></div></div>
           <span class="ro-cap">how closely the evolving copy resembles the target (climbs toward 100%)</span>
         </div>
 
@@ -100,6 +103,7 @@
       </div>
 
       <!-- Target picker -->
+      <p class="section-label">Target</p>
       <div class="card">
         <div class="ctrl" title="The picture to recreate. Pick a built-in one, or upload your own — everything runs on your machine, nothing is sent to any server.">
           <label>Target picture</label>
@@ -112,6 +116,7 @@
       </div>
 
       <!-- Controls -->
+      <p class="section-label">Tuning</p>
       <div class="card">
         <div class="ctrl" title="Starting shape budget. The engine adds more automatically when progress stalls, so you don't need to max this — bigger just costs speed for little gain.">
           <label>Number of shapes <span class="v" id="shapesVal">90</span></label>

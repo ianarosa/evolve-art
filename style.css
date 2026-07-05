@@ -11,7 +11,9 @@
   --text:      #e6e9ef;
   --muted:     #9aa4b2;
   --hint:      #6b7482;
-  --accent:    #22d3ee;   /* cyan  = best  */
+  --accent:    #22d3ee;   /* cyan  = primary accent */
+  --violet:    #a78bfa;   /* violet = gradient partner */
+  --grad:      linear-gradient(135deg, #22d3ee, #a78bfa);
   --accent-2:  #a3a3a3;   /* gray  = mean  */
   --good:      #4ade80;
   --warn:      #fb7185;
@@ -101,20 +103,37 @@ html, body {
   gap: 12px;
 }
 
-#brand h1 { margin: 0; font-size: 19px; letter-spacing: 0.2px; }
-#brand .tag { margin: 4px 0 0; font-size: 12.5px; color: var(--muted); }
-.brand-row { display: flex; align-items: center; justify-content: space-between; }
+#brand { padding-bottom: 2px; }
+#brand h1 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.2px; }
+#brand .tag { margin: 5px 0 0; font-size: 12.5px; color: var(--muted); }
+/* thin gradient hairline under the header — the one place the full gradient shows in the chrome */
+#brand::after {
+  content: ''; display: block; height: 2px; margin-top: 12px;
+  background: var(--grad); border-radius: 2px; opacity: 0.55;
+}
+.brand-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 #helpBtn {
   flex: 0 0 auto;
   width: 26px; height: 26px;
   border-radius: 50%;
   font-size: 14px; font-weight: 700;
-  color: var(--text);
-  background: var(--card-2);
+  color: var(--muted);
+  background: transparent;
   border: 1px solid var(--border-2);
   cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-#helpBtn:hover { background: #24304a; }
+#helpBtn:hover { background: var(--card-2); color: var(--text); border-color: var(--accent); }
+
+/* Section micro-labels — group the panel into Playback / Progress / Target / Tuning */
+.section-label {
+  margin: 6px 2px -5px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--muted);
+}
 
 /* Live status line — turns numbers into a story */
 .status {
@@ -134,30 +153,52 @@ html, body {
 .card {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 14px;
+  border-radius: 14px;
+  padding: 15px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
-/* Transport buttons */
+/* Transport buttons — Play is primary (gradient); Reset/Save are quiet ghosts */
 .transport { display: flex; gap: 8px; }
 .transport button {
   flex: 1;
-  padding: 10px 6px;
+  padding: 11px 6px;
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
   background: var(--card-2);
   border: 1px solid var(--border-2);
-  border-radius: 9px;
+  border-radius: 10px;
   cursor: pointer;
-  transition: background 0.12s, transform 0.05s;
+  transition: background 0.14s, border-color 0.14s, color 0.14s, transform 0.05s, box-shadow 0.14s;
 }
-.transport button:hover { background: #24304a; }
 .transport button:active { transform: translateY(1px); }
-.transport button.primary { background: #0e7490; border-color: #14b8d4; }
-.transport button.primary:hover { background: #0891b2; }
-.transport button.running { background: #7f1d1d; border-color: #ef4444; }
-.transport button.running:hover { background: #991b1b; }
+
+.transport button.ghost {
+  flex: 0 1 auto;
+  background: transparent;
+  border-color: var(--border-2);
+  color: var(--muted);
+}
+.transport button.ghost:hover { background: var(--card-2); color: var(--text); border-color: var(--border-2); }
+
+.transport button.primary {
+  flex: 1.5;
+  background: var(--grad);
+  border: none;
+  color: #05131a;
+  font-weight: 700;
+  box-shadow: 0 4px 16px rgba(34, 211, 238, 0.22);
+}
+.transport button.primary:hover { box-shadow: 0 6px 20px rgba(34, 211, 238, 0.32); }
+
+.transport button.running {
+  background: linear-gradient(135deg, #fb7185, #ef4444);
+  border: none;
+  color: #2a0708;
+  box-shadow: 0 4px 16px rgba(239, 68, 68, 0.24);
+}
+.transport button.running:hover { box-shadow: 0 6px 20px rgba(239, 68, 68, 0.34); }
 
 /* Readouts */
 .readout-grid {
@@ -179,23 +220,46 @@ html, body {
   background: #0c111b;
   border: 1px solid var(--border);
 }
-.chart-key { display: flex; gap: 14px; font-size: 11px; color: var(--muted); margin-top: 6px; }
+.chart-key { display: flex; gap: 14px; font-size: 11px; color: var(--muted); margin: 8px 0 14px; }
 .chart-key span { display: flex; align-items: center; gap: 6px; }
 .line { width: 16px; height: 3px; border-radius: 2px; display: inline-block; }
 .line.best { background: var(--accent); }
 .line.mean { background: var(--accent-2); }
 
-/* Match hero (headline number) */
-.match-hero { display: flex; flex-direction: column; margin-bottom: 12px; }
-.match-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; }
+/* Match hero (headline number) — the centerpiece */
+.match-hero { display: flex; flex-direction: column; margin-bottom: 14px; }
+.match-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; }
 .match-val {
-  font-size: 40px;
+  align-self: flex-start;
+  margin-top: 2px;
+  font-size: 46px;
   font-weight: 800;
-  line-height: 1.05;
-  color: var(--accent);
+  line-height: 1.02;
+  letter-spacing: -1px;
   font-variant-numeric: tabular-nums;
+  color: var(--accent);                 /* fallback if background-clip:text unsupported */
+  background: var(--grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
-.match-hero .ro-cap { margin-top: 3px; }
+.match-hero .ro-cap { margin-top: 8px; }
+
+/* Slim progress bar directly beneath the number */
+.match-bar {
+  height: 6px;
+  margin-top: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.match-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--grad);
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
 
 /* Target picker */
 .target-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -234,31 +298,63 @@ html, body {
 .ctrl.row { display: flex; align-items: center; justify-content: space-between; }
 .ctrl.row label { margin: 0; }
 
-input[type="checkbox"].toggle {
-  width: 18px; height: 18px;
-  accent-color: var(--accent);
-  cursor: pointer;
+/* Smart-start: custom on/off pill switch (pure CSS on the existing checkbox) */
+input#seedToggle.toggle {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 42px; height: 22px;
   flex: none;
+  border-radius: 999px;
+  background: #2a3446;                                   /* muted track = off */
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  position: relative;
+  cursor: pointer;
+  transition: background 0.18s;
 }
+input#seedToggle.toggle::before {
+  content: '';
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: #f1f5f9;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  transition: left 0.18s;
+}
+input#seedToggle.toggle:checked {
+  background: var(--grad);                               /* accent gradient = on */
+  box-shadow: none;
+}
+input#seedToggle.toggle:checked::before { left: 23px; }
+input#seedToggle.toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 select {
   width: 100%;
-  padding: 8px 10px;
+  padding: 9px 32px 9px 11px;
   color: var(--text);
-  background: var(--card-2);
+  background-color: var(--card-2);
+  /* inline chevron caret (data URI — no external asset) */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='none' stroke='%239aa4b2' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
   border: 1px solid var(--border-2);
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 13px;
   cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  transition: border-color 0.14s;
 }
+select:hover { border-color: var(--accent); }
+select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 input[type="range"] {
   width: 100%;
-  height: 5px;
+  height: 6px;
   -webkit-appearance: none;
   appearance: none;
-  background: #263042;
-  border-radius: 3px;
+  background: #232c3d;
+  border-radius: 999px;
   outline: none;
 }
 input[type="range"]::-webkit-slider-thumb {
@@ -267,15 +363,21 @@ input[type="range"]::-webkit-slider-thumb {
   border-radius: 50%;
   background: var(--accent);
   border: 2px solid #06232a;
+  box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.14);
   cursor: pointer;
+  transition: box-shadow 0.14s;
 }
+input[type="range"]:hover::-webkit-slider-thumb,
+input[type="range"]:active::-webkit-slider-thumb { box-shadow: 0 0 0 6px rgba(34, 211, 238, 0.20); }
 input[type="range"]::-moz-range-thumb {
   width: 16px; height: 16px;
   border-radius: 50%;
   background: var(--accent);
   border: 2px solid #06232a;
+  box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.14);
   cursor: pointer;
 }
+input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 6px rgba(34, 211, 238, 0.28); }
 input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
 
 /* How it works */
