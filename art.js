@@ -378,7 +378,9 @@
       this._scaleStartAtt = 0;
       this._reheatCount = 0;   // re-heats since last improvement
       this._reheats = 0;       // total re-heats (telemetry)
-      this._maxMatch = this.matchPct(this.bestError);
+      this._rawAnchor = this.matchPct(this.bestError); // raw match at scale-0 start
+      this._dispAnchor = this._rawAnchor;              // display begins at the honest value
+      this._maxMatch = this._rawAnchor;
       this.history = [this._maxMatch];
       this._computeErrorMap();
     }
@@ -546,9 +548,12 @@
     // Monotonic display value: a running max of the raw current-scale match, so
     // a resolution step-up (metric change) never reads as a regression.
     get bestMatch() {
-      const raw = this.matchPct(this.bestError);
-      if (raw > this._maxMatch) this._maxMatch = raw;
-      return this._maxMatch;
+      // Progress made AT THE CURRENT SCALE, added on top of the display value
+      // locked in from coarser scales. This unfreezes real fine-scale gains that
+      // score below a blurry coarse peak, while never letting the number drop.
+      const disp = this._dispAnchor + (this.matchPct(this.bestError) - this._rawAnchor);
+      if (disp > this._maxMatch) this._maxMatch = disp;
+      return Math.min(this._maxMatch, 99.9);
     }
     get shapeCount() { return this.best.shapes.length; }
     get effectiveMutation() { return this._effAmt; }
@@ -566,7 +571,11 @@
       this._fullRescore();          // exact cache rebuild at the new scale
       this._computeErrorMap();
       this._scaleStartAtt = this.attempts;
-      // _maxMatch is preserved; bestMatch holds it until fine-scale catches up.
+      // Carry the achieved display forward, then measure the new (harder) scale's
+      // progress relative to its own starting point. bestMatch stays continuous at
+      // the step-up (disp == _maxMatch) and climbs as fine detail resolves.
+      this._dispAnchor = this._maxMatch;
+      this._rawAnchor = this.matchPct(this.bestError);
     }
 
     // Re-heat the effective mutation size back to the ceiling and restart the
