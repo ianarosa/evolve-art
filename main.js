@@ -317,27 +317,31 @@
     const yAt = (i) => pT + (1 - (matchHistory[i] - lo) / (hi - lo)) * plotH;
     const baseY = h - pB;
 
-    // Subtle gradient area fill beneath the line (drawn first, so the stroke sits on top)
+    // Riso: faint FLAT orange area fill beneath the line (no gradient)
     cctx.beginPath();
     cctx.moveTo(xAt(0), baseY);
     for (let i = 0; i < n; i++) cctx.lineTo(xAt(i), yAt(i));
     cctx.lineTo(xAt(n - 1), baseY);
     cctx.closePath();
-    const areaGrad = cctx.createLinearGradient(0, pT, 0, baseY);
-    areaGrad.addColorStop(0, 'rgba(34, 211, 238, 0.22)');
-    areaGrad.addColorStop(1, 'rgba(34, 211, 238, 0)');
-    cctx.fillStyle = areaGrad;
+    cctx.fillStyle = 'rgba(255, 90, 52, 0.12)';
     cctx.fill();
 
-    // Line on top
+    // Thick orange ink line, round caps/joins
     cctx.beginPath();
     for (let i = 0; i < n; i++) {
       if (i === 0) cctx.moveTo(xAt(i), yAt(i)); else cctx.lineTo(xAt(i), yAt(i));
     }
-    cctx.strokeStyle = '#22d3ee';
-    cctx.lineWidth = 1.8 * dpr;
+    cctx.strokeStyle = '#ff5a34';
+    cctx.lineWidth = 2.6 * dpr;
     cctx.lineJoin = 'round';
+    cctx.lineCap = 'round';
     cctx.stroke();
+
+    // Blue spot-ink dot at the latest point
+    cctx.beginPath();
+    cctx.arc(xAt(n - 1), yAt(n - 1), 3 * dpr, 0, Math.PI * 2);
+    cctx.fillStyle = '#2350c8';
+    cctx.fill();
   }
 
   function renderReadouts(s) {
