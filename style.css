@@ -95,6 +95,46 @@ html, body {
   color: var(--nav-mut);
 }
 
+/* Portrait rotate nudge — slim riso paper bar (hidden by default; shown only
+   on small PORTRAIT screens via the media query near the bottom of this file) */
+#rotateHint {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex: none;
+  padding: 9px 12px;
+  background: var(--paper-2);
+  border: 2px solid var(--nav);
+  border-radius: 3px;
+  box-shadow: 2px 2px 0 var(--nav);
+  font-size: 12.5px;
+  font-weight: 800;
+  color: var(--nav);
+  text-align: center;
+}
+#rotateHint .rh-icon {
+  color: var(--org);
+  font-size: 15px;
+  font-weight: 900;
+}
+#rotateHint .rh-text { line-height: 1.35; }
+#rotateHint #rotateHintClose {
+  flex: 0 0 auto;
+  width: 22px; height: 22px;
+  padding: 0;
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1;
+  color: var(--nav);
+  background: var(--paper);
+  border: 2px solid var(--nav);
+  border-radius: 3px;
+  box-shadow: 2px 2px 0 var(--nav);
+  cursor: pointer;
+}
+#rotateHint #rotateHintClose:active { transform: translate(2px, 2px); box-shadow: 0 0 0 var(--nav); }
+
 /* ------------------------- Panel ------------------------- */
 #panel {
   flex: 0 0 340px;
@@ -435,5 +475,28 @@ input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--org); cu
   #app { flex-direction: column; height: auto; overflow: visible; }
   #stage { height: auto; }
   #boards { flex-direction: column; }
+  #panel { flex: none; width: 100%; height: auto; border-left: none; border-top: 2px solid var(--nav); }
+}
+
+/* Small screen in PORTRAIT — show the rotate nudge (stacked layout stays) */
+@media (max-width: 900px) and (orientation: portrait) {
+  #rotateHint { display: flex; }
+}
+
+/* Small screen in LANDSCAPE — put the two canvases SIDE BY SIDE and keep them
+   fully visible within the short viewport; the panel scrolls beneath. */
+@media (max-width: 900px) and (orientation: landscape) {
+  #app { flex-direction: column; height: auto; overflow: visible; }
+  #rotateHint { display: none; }        /* auto-hide the portrait nudge */
+  #stage {
+    height: 100vh;
+    min-height: 0;
+    padding: 10px 12px;
+    gap: 8px;
+  }
+  #boards { flex-direction: row; min-height: 0; gap: 14px; }
+  .board figcaption { font-size: 10px; letter-spacing: 0.05em; }
+  .board figcaption .sub { display: none; }   /* keep captions short so canvases fit */
+  #stage-note { display: none; }
   #panel { flex: none; width: 100%; height: auto; border-left: none; border-top: 2px solid var(--nav); }
 }

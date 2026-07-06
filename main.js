@@ -415,11 +415,25 @@
   function resize() {
     const boards = $('boards');
     const dpr = window.devicePixelRatio || 1;
-    const stacked = window.matchMedia('(max-width: 820px)').matches;
-    const gap = 16;
+    // Small screen in landscape (matches the CSS side-by-side rule); phones can't
+    // rotation-lock, so we lay both canvases out side by side and fit them to the
+    // short viewport height. Portrait small screens stay stacked.
+    const landscapePhone = window.matchMedia('(max-width: 900px) and (orientation: landscape)').matches;
+    const stacked = !landscapePhone && window.matchMedia('(max-width: 820px)').matches;
     let size;
-    if (stacked) size = Math.min(boards.clientWidth, 420);
-    else size = Math.min((boards.clientWidth - gap) / 2, $('stage').clientHeight - 70);
+    if (stacked) {
+      size = Math.min(boards.clientWidth, 420);
+    } else if (landscapePhone) {
+      // two side by side, each bounded by BOTH the half-width and the visible
+      // stage height (minus caption ~ 44px) so both stay fully on screen
+      const gap = 14;
+      const availH = $('stage').clientHeight - 44;
+      size = Math.min((boards.clientWidth - gap) / 2, availH);
+    } else {
+      // desktop (unchanged)
+      const gap = 16;
+      size = Math.min((boards.clientWidth - gap) / 2, $('stage').clientHeight - 70);
+    }
     size = Math.max(120, Math.floor(size));
     for (const c of [targetCanvas, evolveCanvas]) {
       c.style.width = size + 'px'; c.style.height = size + 'px';
@@ -430,6 +444,17 @@
     paintEvolve();
   }
   window.addEventListener('resize', resize);
+  // Re-layout when a phone rotates (some mobile browsers fire orientationchange
+  // before a resize, and iOS Safari can skip the resize entirely).
+  window.addEventListener('orientationchange', resize);
+
+  // Portrait rotate nudge — dismiss for the session (auto-hide in landscape is
+  // handled by CSS; this is the nice-to-have manual close).
+  {
+    const hint = $('rotateHint');
+    const close = $('rotateHintClose');
+    if (close && hint) close.addEventListener('click', () => { hint.style.display = 'none'; });
+  }
 
   // ---------------- controls ----------------
   function setRunning(on) {
